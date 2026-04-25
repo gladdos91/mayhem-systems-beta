@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Mayhem Systems Discord Control — Dashboard Preview</title>
+<link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@600;700&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet"/>
+<style>
+:root{
+  --bg0:#0d0e10;--bg1:#111214;--bg2:#17191d;--bg3:#1e2025;--bg4:#252830;
+  --border:#2a2d33;--border2:#363b44;
+  --acc:#5865f2;--acc2:#4752c4;
+  --green:#3ba55c;--yellow:#faa61a;--red:#ed4245;
+  --txt:#c4c8d0;--txt2:#868c99;--txt3:#4d5260;--white:#edeef2;
+  --r:8px;--sidebar:230px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+/* NO overflow:hidden on html/body — causes black screen on Android */
+html{font-size:16px}
+body{font-family:'DM Sans',sans-serif;background:var(--bg0);color:var(--txt);min-height:100vh}
+button{font-family:inherit;cursor:pointer;border:none}
+code{background:rgba(88,101,242,.1);border:1px solid rgba(88,101,242,.2);border-radius:4px;padding:1px 6px;font-size:11px;color:#7289fa;font-family:monospace}
+a{color:inherit;text-decoration:none}
+
+/* ── Layout: use position:fixed for sidebar on mobile ── */
+.shell{display:flex;min-height:100vh;position:relative}
+
+/* Backdrop */
+.bd{position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:40;opacity:0;pointer-events:none;transition:opacity .25s;top:52px}
+.bd.open{opacity:1;pointer-events:all}
+
+/* Sidebar — fixed on mobile, static on desktop */
+.sb{
+  width:var(--sidebar);
+  background:#17191d;
+  border-right:1px solid var(--border);
+  display:flex;flex-direction:column;
+  /* Desktop: static in flex flow */
+  flex-shrink:0;
+  position:sticky;
+  top:0;
+  height:100vh;
+  z-index:50;
+}
+.sb-top{padding:14px 12px 8px;display:flex;align-items:center;gap:9px;flex-shrink:0}
+.lm{width:32px;height:32px;border-radius:9px;flex-shrink:0;background:linear-gradient(135deg,#5865f2,#eb459e);display:flex;align-items:center;justify-content:center;font-size:15px}
+.ln{font-family:'Rajdhani',sans-serif;font-size:14px;font-weight:700;color:var(--white);line-height:1.1}
+.ls{font-size:9px;color:var(--txt3);text-transform:uppercase;letter-spacing:.07em}
+.gp{margin:0 9px 8px;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);padding:7px 9px;display:flex;align-items:center;gap:7px;cursor:pointer;flex-shrink:0}
+.gi{width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,#5865f2,#eb459e);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:11px;color:#fff;flex-shrink:0}
+.gn{font-size:12px;font-weight:600;color:var(--white);flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.gm{font-size:10px;color:var(--txt3)}
+.snav{flex:1;padding:2px 6px;overflow-y:auto}
+.ngl{font-size:9px;font-weight:700;color:var(--txt3);text-transform:uppercase;letter-spacing:.08em;padding:8px 6px 3px}
+.ni{display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:3px;color:var(--txt3);font-weight:500;font-size:12px;cursor:pointer;margin-bottom:1px;-webkit-tap-highlight-color:transparent}
+.ni:hover,.ni:active{background:rgba(255,255,255,.05);color:var(--txt)}
+.ni.active{background:rgba(88,101,242,.18);color:var(--white)}
+.ni-i{font-size:13px;width:16px;text-align:center}
+.nb{margin-left:auto;padding:1px 5px;border-radius:8px;font-size:9px;font-weight:700}
+.nb-r{background:var(--red);color:#fff}.nb-g{background:var(--green);color:#fff}
+.sbf{border-top:1px solid var(--border);padding:10px 12px;display:flex;align-items:center;gap:7px;flex-shrink:0}
+.ua{width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,#eb459e,#f47b67);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:11px;color:#fff;flex-shrink:0}
+
+/* ── Main content — no overflow:hidden ── */
+.main{flex:1;display:flex;flex-direction:column;min-width:0;min-height:100vh}
+.topbar{
+  position:sticky;top:0;z-index:30;
+  height:52px;
+  background:#111214;
+  border-bottom:1px solid var(--border);
+  padding:0 16px;
+  display:flex;align-items:center;justify-content:space-between;
+  flex-shrink:0;
+}
+.tbl{display:flex;align-items:center;gap:8px}
+.hbg{display:none;background:#252830;border:1px solid var(--border2);color:var(--white);font-size:18px;padding:5px 10px;border-radius:6px;line-height:1;font-weight:700}
+.tbt{font-family:'Rajdhani',sans-serif;font-size:17px;font-weight:700;color:var(--white)}
+.tbr{display:flex;gap:6px}
+.tbb{border-radius:4px;padding:6px 12px;font-size:12px;font-weight:600}
+.tbb-p{background:var(--acc);color:#fff}
+.tbb-s{background:var(--bg3);border:1px solid var(--border2);color:var(--txt)}
+
+/* ── Scroll area — normal document flow ── */
+.scroll{padding:18px 20px;flex:1}
+.inn{max-width:900px;margin:0 auto}
+
+/* Pages */
+.pg{display:none}.pg.active{display:block}
+.ph{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:10px}
+.ph h2{font-family:'Rajdhani',sans-serif;font-size:20px;font-weight:700;color:var(--white)}
+.ph p{font-size:11px;color:var(--txt3);margin-top:1px;width:100%}
+.sl{font-size:10px;font-weight:700;color:var(--txt3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:9px;margin-top:4px}
+
+/* Stats */
+.sg{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:16px}
+.sc{background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:13px;position:relative}
+.sc::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;border-radius:var(--r) var(--r) 0 0}
+.sc.bl::before{background:var(--acc)}.sc.gr::before{background:var(--green)}.sc.yl::before{background:var(--yellow)}.sc.rd::before{background:var(--red)}
+.st{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
+.si{font-size:15px}
+.sd{font-size:9px;padding:2px 5px;border-radius:8px;font-weight:600}
+.du{background:rgba(59,165,92,.15);color:var(--green)}.dd{background:rgba(237,66,69,.15);color:var(--red)}
+.sv{font-family:'Rajdhani',sans-serif;font-size:24px;font-weight:700;color:var(--white);line-height:1}
+.slb{font-size:10px;color:var(--txt3);margin-top:1px}
+
+/* QA */
+.qg{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.qa{background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:11px 13px;color:var(--txt2);font-weight:500;font-size:12px;text-align:left;width:100%}
+.qa:active{background:var(--bg3);border-color:var(--acc)}
+
+/* Card */
+.cd{background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:14px 16px;margin-bottom:12px}
+.ct{font-family:'Rajdhani',sans-serif;font-size:13px;font-weight:700;color:var(--white);margin-bottom:11px;display:flex;align-items:center;justify-content:space-between}
+.ct small{font-family:'DM Sans',sans-serif;font-size:10px;font-weight:400;color:var(--txt3)}
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:11px;margin-bottom:11px}
+
+/* Row */
+.rw{display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--border)}
+.rw:last-child{border:none;padding-bottom:0}
+.ri{flex:1;min-width:0}
+.rt{font-size:12px;font-weight:600;color:var(--white);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rm{font-size:10px;color:var(--txt3);margin-top:1px}
+.ra{display:flex;gap:4px;flex-shrink:0}
+.tn{font-family:'Rajdhani',sans-serif;font-size:12px;font-weight:700;color:var(--txt3);width:34px;flex-shrink:0}
+.bg{padding:2px 6px;border-radius:7px;font-size:9px;font-weight:700;text-transform:uppercase;flex-shrink:0}
+.op{background:rgba(59,165,92,.15);color:var(--green)}.cl{background:rgba(79,84,92,.3);color:var(--txt3)}
+.vd{width:7px;height:7px;border-radius:50%;background:var(--green);flex-shrink:0;box-shadow:0 0 5px var(--green)}
+.ab{width:3px;border-radius:2px;align-self:stretch;flex-shrink:0;min-height:26px}
+.fi{width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10px;flex-shrink:0}
+.fb{background:rgba(88,101,242,.2)}.fg{background:rgba(59,165,92,.2)}.fy{background:rgba(250,166,26,.2)}.fr2{background:rgba(237,66,69,.2)}
+.fm{font-size:11px;color:var(--txt);line-height:1.4}.fm strong{color:var(--white)}
+.ft{font-size:10px;color:var(--txt3);margin-top:1px}
+.pon{background:rgba(59,165,92,.15);color:var(--green);padding:2px 7px;border-radius:8px;font-size:10px;font-weight:700}
+.pof{background:rgba(79,84,92,.2);color:var(--txt3);padding:2px 7px;border-radius:8px;font-size:10px;font-weight:700}
+.wb{background:rgba(254,231,92,.15);color:var(--yellow);padding:2px 6px;border-radius:7px;font-size:9px;font-weight:700;flex-shrink:0}
+.smr{display:flex;gap:14px;margin-bottom:11px;flex-wrap:wrap}
+.sm{font-size:11px;color:var(--txt3)}.sm strong{font-size:13px;font-weight:700;color:var(--white);margin-right:2px}
+
+/* Buttons */
+.btn{display:inline-flex;align-items:center;gap:5px;padding:6px 11px;border-radius:3px;font-weight:600;font-size:11px}
+.bp{background:var(--acc);color:#fff}
+.bs{background:var(--bg3);border:1px solid var(--border2);color:var(--txt)}
+.bx{background:var(--red);color:#fff}
+.bxs{padding:3px 7px;font-size:10px}
+
+/* Forms */
+.frw{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 0;border-bottom:1px solid var(--border)}
+.frw:last-child{border:none;padding-bottom:0}
+.frw label{font-size:12px;font-weight:500;color:var(--txt);flex-shrink:0}
+.frw label small{display:block;font-size:10px;color:var(--txt3);font-weight:400}
+select,input{background:var(--bg1);border:1px solid var(--border);border-radius:3px;color:var(--txt);padding:5px 8px;font-size:11px;font-family:inherit}
+textarea{background:var(--bg1);border:1px solid var(--border);border-radius:3px;color:var(--txt);padding:5px 8px;font-size:11px;font-family:inherit;resize:vertical}
+.tg{position:relative;display:inline-block;width:36px;height:20px;flex-shrink:0}
+.tg input{opacity:0;width:0;height:0}
+.tg span{position:absolute;inset:0;background:var(--border);border-radius:20px;cursor:pointer;transition:background .2s}
+.tg span::before{content:'';position:absolute;width:14px;height:14px;left:3px;top:3px;background:#fff;border-radius:50%;transition:transform .2s}
+.tg input:checked+span{background:var(--acc)}
+.tg input:checked+span::before{transform:translateX(16px)}
+
+/* Tabs */
+.tabs{display:flex;gap:1px;border-bottom:1px solid var(--border);margin-bottom:12px;flex-wrap:wrap}
+.tab{background:none;border:none;color:var(--txt3);padding:6px 11px;font-size:11px;font-weight:500;border-bottom:2px solid transparent;margin-bottom:-1px}
+.tab.active{color:var(--acc);border-bottom-color:var(--acc)}
+.tp{display:none}.tp.active{display:block}
+
+/* Filters */
+.fp{background:var(--bg3);border:1px solid var(--border2);border-radius:14px;padding:3px 9px;font-size:10px;color:var(--txt3);cursor:pointer}
+.fp.active{background:var(--acc);border-color:var(--acc);color:#fff}
+
+/* Log events */
+.lr{display:flex;align-items:center;gap:9px;padding:8px 0;border-bottom:1px solid var(--border)}
+.lr:last-child{border:none}
+.lc{display:flex;align-items:center;gap:6px;flex-shrink:0}
+.lc select{width:120px;font-size:10px;padding:3px 6px}
+
+/* RR */
+.rrc{background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:13px 15px;margin-bottom:11px}
+.rrh{display:flex;align-items:center;justify-content:space-between;margin-bottom:9px}
+.rrt{font-family:'Rajdhani',sans-serif;font-size:13px;font-weight:700;color:var(--white)}
+.rri{display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--border)}
+.rri:last-child{border:none}
+
+/* Rules */
+.rlc{background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:13px 15px;margin-bottom:11px}
+.rlh{display:flex;align-items:center;justify-content:space-between;margin-bottom:9px}
+.rlt{font-family:'Rajdhani',sans-serif;font-size:13px;font-weight:700;color:var(--white)}
+.rli{display:flex;align-items:flex-start;gap:9px;padding:7px 0;border-bottom:1px solid var(--border)}
+.rli:last-child{border:none}
+.rln{font-family:'Rajdhani',sans-serif;font-size:17px;font-weight:700;color:var(--acc);width:20px;flex-shrink:0;line-height:1.2}
+
+/* Export */
+.ec{background:var(--bg2);border:1px solid var(--border);border-radius:var(--r);padding:16px;margin-bottom:12px}
+.ec.bl{border-left:3px solid var(--acc)}
+.ec.yl{border-left:3px solid var(--yellow)}
+.eg{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px;margin-top:10px}
+.ei{background:var(--bg3);border:1px solid var(--border);border-radius:6px;padding:8px 10px;display:flex;align-items:center;gap:7px}
+.ein{font-size:11px;font-weight:600;color:var(--white)}
+.eid{font-size:10px;color:var(--txt3);margin-top:1px}
+
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.pulse{animation:pulse 2s infinite}
+
+/* ── MOBILE ── */
+@media(max-width:680px){
+  /* Sidebar becomes a fixed off-canvas drawer */
+  .sb{
+    position:fixed;
+    left:0;top:0;bottom:0;
+    transform:translateX(-100%);
+    transition:transform .28s cubic-bezier(.4,0,.2,1);
+    z-index:50;
+    /* CRITICAL: solid background, no transparency */
+    background:#17191d;
+    box-shadow:4px 0 32px rgba(0,0,0,.9);
+  }
+  .sb.open{transform:translateX(0)}
+  .hbg{display:flex !important;align-items:center;justify-content:center}
+  .sg{grid-template-columns:1fr 1fr;gap:8px}
+  .g2{grid-template-columns:1fr}
+  .qg{grid-template-columns:1fr 1fr}
+  .scroll{padding:14px 12px}
+  .tbb-s{display:none}
+  .main{min-height:100vh}
+}
+@media(max-width:400px){
+  .sv{font-size:20px}
+  .tbt{font-size:15px}
+  .sg{gap:6px}
+}
+</style>
+</head>
+<body>
+<div class="shell">
+<div class="bd" id="bd" onclick="closeSb()"></div>
+
+<!-- SIDEBAR -->
+<aside class="sb" id="sb">
+  <div class="sb-top">
+    <svg width="28" height="28" viewBox="0 0 100 115" fill="none" style="flex-shrink:0">
+      <polygon points="50,3 93,27 93,73 50,97 7,73 7,27" fill="#0d0e10" stroke="#ed4245" stroke-width="6"/>
+      <polygon points="50,12 85,32 85,68 50,88 15,68 15,32" fill="none" stroke="#00e5ff" stroke-width="1.5" opacity="0.45"/>
+      <text x="50" y="71" text-anchor="middle" font-family="Arial Black,sans-serif" font-size="50" font-weight="900" fill="#ed4245">M</text>
+    </svg>
+    <div><div class="ln">Mayhem Systems</div><div class="ls">Discord Control</div></div>
+  </div>
+  <div class="gp">
+    <div class="gi">M</div>
+    <div style="flex:1;min-width:0"><div class="gn">Mayhem HQ</div><div class="gm">2,481 members</div></div>
+    <span style="color:var(--txt3);font-size:10px">▾</span>
+  </div>
+  <nav class="snav">
+    <div class="ngl">General</div>
+    <div class="ni active" data-p="overview" onclick="go('overview',this)"><span class="ni-i">🏠</span>Overview</div>
+    <div class="ni" data-p="announcements" onclick="go('announcements',this)"><span class="ni-i">📢</span>Announcements<span class="nb nb-g">3</span></div>
+    <div class="ni" data-p="tickets" onclick="go('tickets',this)"><span class="ni-i">🎫</span>Tickets<span class="nb nb-r">12</span></div>
+    <div class="ngl">Management</div>
+    <div class="ni" data-p="automod" onclick="go('automod',this)"><span class="ni-i">🛡️</span>AutoMod</div>
+    <div class="ni" data-p="tempvoice" onclick="go('tempvoice',this)"><span class="ni-i">🎙️</span>Temp Voice</div>
+    <div class="ni" data-p="serverlogs" onclick="go('serverlogs',this)"><span class="ni-i">📋</span>Server Logs</div>
+    <div class="ngl">Community</div>
+    <div class="ni" data-p="welcome" onclick="go('welcome',this)"><span class="ni-i">👋</span>Welcome</div>
+    <div class="ni" data-p="autoroles" onclick="go('autoroles',this)"><span class="ni-i">🎭</span>Auto Roles</div>
+    <div class="ni" data-p="reactionroles" onclick="go('reactionroles',this)"><span class="ni-i">⭐</span>Reaction Roles</div>
+    <div class="ni" data-p="rules" onclick="go('rules',this)"><span class="ni-i">📜</span>Rules</div>
+    <div class="ngl">Data</div>
+    <div class="ni" data-p="exportimport" onclick="go('exportimport',this)"><span class="ni-i">💾</span>Export / Import</div>
+  </nav>
+  <div class="sbf">
+    <div class="ua">A</div>
+    <div style="flex:1;min-width:0"><div style="font-size:11px;font-weight:600;color:var(--white)">Admin</div><div style="font-size:10px;color:var(--txt3)">@mayhem.admin</div></div>
+    <button style="margin-left:auto;background:none;color:var(--txt3);font-size:14px;padding:3px;border-radius:4px">⎋</button>
+  </div>
+</aside>
+
+<!-- MAIN -->
+<div class="main">
+  <div class="topbar">
+    <div class="tbl">
+      <button class="hbg" onclick="toggleSb()">☰</button>
+      <div class="tbt" id="tbt">🏠 Overview</div>
+    </div>
+    <div class="tbr">
+      <button class="tbb tbb-s">🔔</button>
+      <button class="tbb tbb-p" onclick="go('announcements')">📢 Announce</button>
+    </div>
+  </div>
+
+  <div class="scroll">
+  <div class="inn">
+
+  <!-- OVERVIEW -->
+  <div class="pg active" id="pg-overview">
+    <div class="ph"><h2>💥 Overview</h2><p>Mayhem HQ · Take control of your discord.</p></div>
+    <div class="sg">
+      <div class="sc bl"><div class="st"><span class="si">👥</span><span class="sd du">+24</span></div><div class="sv">2,481</div><div class="slb">Members</div></div>
+      <div class="sc gr"><div class="st"><span class="si">🎫</span><span class="sd du">+3</span></div><div class="sv">12</div><div class="slb">Open Tickets</div></div>
+      <div class="sc yl"><div class="st"><span class="si">🎙️</span><span class="sd du">Live</span></div><div class="sv">7</div><div class="slb">Active VCs</div></div>
+      <div class="sc rd"><div class="st"><span class="si">🛡️</span><span class="sd dd">−5</span></div><div class="sv">34</div><div class="slb">AutoMod</div></div>
+    </div>
+    <div class="sl">Quick Actions</div>
+    <div class="qg" style="margin-bottom:14px">
+      <button class="qa" onclick="go('announcements')">📢 Announce</button>
+      <button class="qa" onclick="go('tickets')">🎫 Tickets</button>
+      <button class="qa" onclick="go('welcome')">👋 Welcome</button>
+      <button class="qa" onclick="go('reactionroles')">⭐ Roles</button>
+      <button class="qa" onclick="go('rules')">📜 Rules</button>
+      <button class="qa" onclick="go('serverlogs')">📋 Logs</button>
+    </div>
+    <div class="g2">
+      <div class="cd"><div class="ct">🎫 Recent Tickets <small>12 open</small></div>
+        <div class="rw"><div class="tn">#0047</div><span class="bg op">OPEN</span><div class="ri"><div class="rt">Bug Report</div><div class="rm">@xKaiser · 4m · 🔴 High</div></div></div>
+        <div class="rw"><div class="tn">#0046</div><span class="bg op">OPEN</span><div class="ri"><div class="rt">General Support</div><div class="rm">@nova.star · 18m</div></div></div>
+        <div class="rw"><div class="tn">#0044</div><span class="bg cl">CLOSED</span><div class="ri"><div class="rt">Account Issue</div><div class="rm">@rynx · 3h</div></div></div>
+      </div>
+      <div class="cd"><div class="ct">🎙️ Active Voice <small>7 live</small></div>
+        <div class="rw"><div class="vd pulse"></div><div class="ri"><div class="rt">xKaiser's Channel</div><div class="rm">4/10 users</div></div></div>
+        <div class="rw"><div class="vd pulse"></div><div class="ri"><div class="rt">🎮 Gaming Session</div><div class="rm">3 users</div></div></div>
+        <div class="rw"><div class="vd pulse"></div><div class="ri"><div class="rt">Chill Vibes 🎵</div><div class="rm">6/6 users</div></div></div>
+      </div>
+    </div>
+    <div class="g2">
+      <div class="cd"><div class="ct">📢 Announcements</div>
+        <div class="rw"><div class="ab" style="background:#5865f2"></div><div class="ri"><div class="rt">Server Update v2.4</div><div class="rm">2h · #announcements</div></div></div>
+        <div class="rw"><div class="ab" style="background:#3ba55c"></div><div class="ri"><div class="rt">Event This Weekend 🎉</div><div class="rm">6h · #events</div></div></div>
+        <div class="rw"><div class="ab" style="background:#faa61a"></div><div class="ri"><div class="rt">Rule Update</div><div class="rm">1d · #rules</div></div></div>
+      </div>
+      <div class="cd"><div class="ct">🛡️ AutoMod Status</div>
+        <div class="rw"><div class="ri"><div class="rt" style="font-size:11px;color:var(--txt)">Bad Words</div></div><span class="pon">ON</span></div>
+        <div class="rw"><div class="ri"><div class="rt" style="font-size:11px;color:var(--txt)">Spam Filter</div></div><span class="pon">ON</span></div>
+        <div class="rw"><div class="ri"><div class="rt" style="font-size:11px;color:var(--txt)">Links</div></div><span class="pon">ON</span></div>
+        <div class="rw"><div class="ri"><div class="rt" style="font-size:11px;color:var(--txt)">Caps</div></div><span class="pof">OFF</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ANNOUNCEMENTS -->
+  <div class="pg" id="pg-announcements">
+    <div class="ph"><h2>📢 Announcements</h2><button class="btn bp">+ New</button></div>
+    <div class="cd">
+      <div class="rw"><div class="ab" style="background:#5865f2"></div><div class="ri"><div class="rt">Server Update v2.4</div><div class="rm">2h ago · #announcements</div></div><button class="btn bxs bx">🗑️</button></div>
+      <div class="rw"><div class="ab" style="background:#3ba55c"></div><div class="ri"><div class="rt">Event This Weekend 🎉</div><div class="rm">6h ago · #events</div></div><button class="btn bxs bx">🗑️</button></div>
+      <div class="rw"><div class="ab" style="background:#faa61a"></div><div class="ri"><div class="rt">Rule Update</div><div class="rm">1d ago · #rules</div></div><button class="btn bxs bx">🗑️</button></div>
+    </div>
+  </div>
+
+  <!-- TICKETS -->
+  <div class="pg" id="pg-tickets">
+    <div class="ph"><h2>🎫 Tickets</h2><button class="btn bp">+ New Panel</button></div>
+    <div class="tabs">
+      <button class="tab active" onclick="swTab(this,'tk-panels')">Panels</button>
+      <button class="tab" onclick="swTab(this,'tk-tickets')">Tickets</button>
+      <button class="tab" onclick="swTab(this,'tk-blacklist')">Blacklist</button>
+      <button class="tab" onclick="swTab(this,'tk-stats')">Stats</button>
+    </div>
+    <div class="tp active" id="tk-panels">
+      <div class="cd" style="border-top:2px solid var(--acc)">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+          <div><div style="font-family:'Rajdhani',sans-serif;font-size:14px;font-weight:700;color:var(--white)">🎫 Support Tickets</div><div style="font-size:10px;color:var(--txt3)">ID: <code>pnl_abc1</code> · #support · Buttons</div></div>
+          <div style="display:flex;gap:5px"><button class="btn bxs bs">🔄 Deploy</button><button class="btn bxs bx">🗑️</button></div>
+        </div>
+        <div style="font-size:10px;font-weight:700;color:var(--txt3);text-transform:uppercase;margin-bottom:8px">Categories</div>
+        <div style="background:var(--bg3);border:1px solid var(--border2);border-radius:6px;padding:10px 12px;margin-bottom:8px">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;flex-wrap:wrap;gap:6px">
+            <div style="display:flex;align-items:center;gap:7px">
+              <span style="background:var(--acc);border-radius:4px;padding:2px 8px;font-size:10px;font-weight:700;color:#fff">🎫 Support</span>
+              <span style="font-size:9px;color:var(--txt3)">ID: <code>cat_s01</code></span>
+            </div>
+            <div style="display:flex;gap:4px"><button class="btn bxs bs">⚙️</button><button class="btn bxs bx">🗑️</button></div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:10px;margin-bottom:8px">
+            <div style="color:var(--txt3)">👮 Admins: <span style="color:var(--txt)">@Staff</span></div>
+            <div style="color:var(--txt3)">👁️ Readonly: <span style="color:var(--txt)">@Helper</span></div>
+            <div style="color:var(--txt3)">⏱️ Autoclose: <span style="color:var(--green)">24h</span></div>
+            <div style="color:var(--txt3)">🔢 Limit: <span style="color:var(--txt)">3/user</span></div>
+          </div>
+          <div style="border-top:1px solid var(--border);padding-top:8px">
+            <div style="font-size:9px;font-weight:700;color:var(--txt3);text-transform:uppercase;margin-bottom:6px">Questions</div>
+            <div style="display:flex;align-items:center;gap:7px;font-size:10px;margin-bottom:4px"><span style="background:rgba(88,101,242,.1);border:1px solid rgba(88,101,242,.2);border-radius:3px;padding:1px 5px;color:#7289fa;font-size:9px">SHORT</span><span style="color:var(--txt)">What is your issue?</span><span style="color:var(--red);font-size:9px;margin-left:auto">required</span></div>
+            <div style="display:flex;align-items:center;gap:7px;font-size:10px"><span style="background:rgba(88,101,242,.1);border:1px solid rgba(88,101,242,.2);border-radius:3px;padding:1px 5px;color:#7289fa;font-size:9px">PARA</span><span style="color:var(--txt)">Provide more details</span><span style="color:var(--txt3);font-size:9px;margin-left:auto">optional</span></div>
+            <button class="btn bxs bs" style="margin-top:7px">+ Question</button>
+          </div>
+        </div>
+        <div style="background:var(--bg3);border:1px solid var(--border2);border-radius:6px;padding:10px 12px;margin-bottom:8px">
+          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px">
+            <div style="display:flex;align-items:center;gap:7px">
+              <span style="background:var(--red);border-radius:4px;padding:2px 8px;font-size:10px;font-weight:700;color:#fff">🐛 Bug Report</span>
+              <span style="font-size:9px;color:var(--txt3)">ID: <code>cat_b02</code></span>
+            </div>
+            <div style="display:flex;gap:4px"><button class="btn bxs bs">⚙️</button><button class="btn bxs bx">🗑️</button></div>
+          </div>
+        </div>
+        <button class="btn bp" style="margin-top:4px;font-size:11px">+ Add Category</button>
+      </div>
+      <button class="btn bp" style="font-size:11px">+ New Panel</button>
+    </div>
+    <div class="tp" id="tk-tickets">
+      <div class="smr"><div class="sm"><strong>12</strong>Open</div><div class="sm"><strong>94</strong>Closed</div><div class="sm"><strong>5</strong>Today</div></div>
+      <div style="display:flex;gap:5px;margin-bottom:10px;flex-wrap:wrap"><button class="fp active">All</button><button class="fp">Open</button><button class="fp">Closed</button></div>
+      <div class="cd">
+        <div class="rw"><div class="tn">#0047</div><span class="bg op">OPEN</span><div class="ri"><div class="rt">Bug Report</div><div class="rm">@xKaiser · 4m · 🔴 High</div></div><div class="ra"><button class="btn bxs bs">🔒</button><button class="btn bxs bx">🗑️</button></div></div>
+        <div class="rw"><div class="tn">#0046</div><span class="bg op">OPEN</span><div class="ri"><div class="rt">General Support</div><div class="rm">@nova.star · 18m</div></div><div class="ra"><button class="btn bxs bs">🔒</button><button class="btn bxs bx">🗑️</button></div></div>
+        <div class="rw"><div class="tn">#0044</div><span class="bg cl">CLOSED</span><div class="ri"><div class="rt">Account Issue</div><div class="rm">@rynx · 3h</div></div><div class="ra"><button class="btn bxs bs">📄</button><button class="btn bxs bx">🗑️</button></div></div>
+      </div>
+    </div>
+    <div class="tp" id="tk-blacklist">
+      <div class="cd">
+        <div class="rw"><div class="ri"><div class="rt">spammer99</div><div class="rm">Spam abuse · 2d ago</div></div><button class="btn bxs bx">Remove</button></div>
+        <div class="rw"><div class="ri"><div class="rt">troll.user</div><div class="rm">Repeated abuse · 5d ago</div></div><button class="btn bxs bx">Remove</button></div>
+      </div>
+    </div>
+    <div class="tp" id="tk-stats">
+      <div class="sg" style="grid-template-columns:repeat(auto-fill,minmax(130px,1fr))">
+        <div class="sc gr"><div class="st"><span class="si">🎫</span></div><div class="sv">106</div><div class="slb">Total</div></div>
+        <div class="sc bl"><div class="st"><span class="si">🟢</span></div><div class="sv">12</div><div class="slb">Open</div></div>
+        <div class="sc rd"><div class="st"><span class="si">🔒</span></div><div class="sv">94</div><div class="slb">Closed</div></div>
+        <div class="sc yl"><div class="st"><span class="si">📅</span></div><div class="sv">5</div><div class="slb">Today</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- AUTOMOD -->
+  <div class="pg" id="pg-automod">
+    <div class="ph"><h2>🛡️ AutoMod</h2><button class="btn bp">💾 Save</button></div>
+    <div class="tabs">
+      <button class="tab active" onclick="swTab(this,'am-gen')">General</button>
+      <button class="tab" onclick="swTab(this,'am-bw')">Bad Words</button>
+      <button class="tab" onclick="swTab(this,'am-sp')">Spam</button>
+      <button class="tab" onclick="swTab(this,'am-lk')">Links</button>
+      <button class="tab" onclick="swTab(this,'am-cp')">Caps</button>
+      <button class="tab" onclick="swTab(this,'am-mn')">Mentions</button>
+      <button class="tab" onclick="swTab(this,'am-wn')">Warnings</button>
+    </div>
+    <div class="tp active" id="am-gen"><div class="cd">
+      <div class="frw"><label>Enabled</label><label class="tg"><input type="checkbox" checked/><span></span></label></div>
+      <div class="frw"><label>Log Channel</label><select style="width:140px"><option>#mod-logs</option></select></div>
+    </div></div>
+    <div class="tp" id="am-bw"><div class="cd">
+      <div class="frw"><label>Bad Word Filter</label><label class="tg"><input type="checkbox" checked/><span></span></label></div>
+      <div class="frw"><label>Action</label><select style="width:130px"><option>Delete</option><option>Warn</option><option>Mute</option></select></div>
+      <div class="frw"><label>Words</label><textarea rows="4" style="width:170px">badword1&#10;slur</textarea></div>
+    </div></div>
+    <div class="tp" id="am-sp"><div class="cd">
+      <div class="frw"><label>Spam Filter</label><label class="tg"><input type="checkbox" checked/><span></span></label></div>
+      <div class="frw"><label>Threshold</label><input type="number" value="5" style="width:70px"/></div>
+      <div class="frw"><label>Window (s)</label><input type="number" value="5" style="width:70px"/></div>
+    </div></div>
+    <div class="tp" id="am-lk"><div class="cd">
+      <div class="frw"><label>Block Links</label><label class="tg"><input type="checkbox" checked/><span></span></label></div>
+      <div class="frw"><label>Block Invites</label><label class="tg"><input type="checkbox" checked/><span></span></label></div>
+    </div></div>
+    <div class="tp" id="am-cp"><div class="cd">
+      <div class="frw"><label>Caps Filter</label><label class="tg"><input type="checkbox"/><span></span></label></div>
+      <div class="frw"><label>Threshold (%)</label><input type="number" value="70" style="width:70px"/></div>
+    </div></div>
+    <div class="tp" id="am-mn"><div class="cd">
+      <div class="frw"><label>Mention Spam</label><label class="tg"><input type="checkbox" checked/><span></span></label></div>
+      <div class="frw"><label>Max Mentions</label><input type="number" value="5" style="width:70px"/></div>
+    </div></div>
+    <div class="tp" id="am-wn"><div class="cd">
+      <div class="rw"><span class="wb">⚠️</span><div class="ri"><div class="rt">Spam detected</div><div class="rm">spammer99 · 12m ago</div></div></div>
+      <div class="rw"><span class="wb">⚠️</span><div class="ri"><div class="rt">Unauthorized link</div><div class="rm">linkguy · 1h ago</div></div></div>
+      <div class="rw"><span class="wb">⚠️</span><div class="ri"><div class="rt">Mention spam (9)</div><div class="rm">mentionbot · 3h ago</div></div></div>
+    </div></div>
+  </div>
+
+  <!-- TEMP VOICE -->
+  <div class="pg" id="pg-tempvoice">
+    <div class="ph"><h2>🎙️ Temp Voice</h2><button class="btn bp">💾 Save</button></div>
+    <div class="cd"><div class="ct">Configuration</div>
+      <div class="frw"><label>Hub Channel</label><select style="width:150px"><option>🔊 Join to Create</option></select></div>
+      <div class="frw"><label>Category</label><select style="width:150px"><option>📁 Voice Channels</option></select></div>
+      <div class="frw"><label>Default Limit</label><input type="number" value="0" style="width:70px"/></div>
+    </div>
+    <div class="cd"><div class="ct">Active Channels <small>7 live</small></div>
+      <div class="rw"><div class="vd pulse"></div><div class="ri"><div class="rt">xKaiser's Channel</div><div class="rm">Owner: xKaiser</div></div><span style="font-size:10px;background:var(--bg3);padding:1px 7px;border-radius:8px;color:var(--txt2)">4/10</span></div>
+      <div class="rw"><div class="vd pulse"></div><div class="ri"><div class="rt">🎮 Gaming Session</div><div class="rm">Owner: nova.star</div></div><span style="font-size:10px;background:var(--bg3);padding:1px 7px;border-radius:8px;color:var(--txt2)">3</span></div>
+      <div class="rw"><div class="vd pulse"></div><div class="ri"><div class="rt">Chill Vibes 🎵</div><div class="rm">Owner: frost.exe</div></div><span style="font-size:10px;background:var(--bg3);padding:1px 7px;border-radius:8px;color:var(--txt2)">6/6</span></div>
+    </div>
+  </div>
+
+  <!-- SERVER LOGS -->
+  <div class="pg" id="pg-serverlogs">
+    <div class="ph"><h2>📋 Server Logs</h2><button class="btn bp">💾 Save</button></div>
+    <div class="cd"><div class="ct">Default</div>
+      <div class="frw"><label>Enabled</label><label class="tg"><input type="checkbox" checked/><span></span></label></div>
+      <div class="frw"><label>Default Channel</label><select style="width:140px"><option>#server-logs</option></select></div>
+    </div>
+    <div class="cd"><div class="ct">Event Channels</div>
+      <div class="lr"><div style="flex:1"><div style="font-size:11px;color:var(--txt)">Member Join</div><div style="font-size:10px;color:var(--txt3)">User joins server</div></div><div class="lc"><label class="tg"><input type="checkbox" checked/><span></span></label><select><option>#join-logs</option></select></div></div>
+      <div class="lr"><div style="flex:1"><div style="font-size:11px;color:var(--txt)">Member Leave</div><div style="font-size:10px;color:var(--txt3)">User leaves or kicked</div></div><div class="lc"><label class="tg"><input type="checkbox" checked/><span></span></label><select><option>Default</option></select></div></div>
+      <div class="lr"><div style="flex:1"><div style="font-size:11px;color:var(--txt)">Ban / Unban</div><div style="font-size:10px;color:var(--txt3)">Bans and unbans</div></div><div class="lc"><label class="tg"><input type="checkbox" checked/><span></span></label><select><option>#mod-logs</option></select></div></div>
+      <div class="lr"><div style="flex:1"><div style="font-size:11px;color:var(--txt)">Message Deleted</div><div style="font-size:10px;color:var(--txt3)">Message deleted</div></div><div class="lc"><label class="tg"><input type="checkbox" checked/><span></span></label><select><option>#msg-logs</option></select></div></div>
+      <div class="lr"><div style="flex:1"><div style="font-size:11px;color:var(--txt)">Voice Activity</div><div style="font-size:10px;color:var(--txt3)">VC join/leave/move</div></div><div class="lc"><label class="tg"><input type="checkbox"/><span></span></label><select><option>Default</option></select></div></div>
+    </div>
+  </div>
+
+  <!-- WELCOME -->
+  <div class="pg" id="pg-welcome">
+    <div class="ph"><h2>👋 Welcome</h2><button class="btn bp">💾 Save</button></div>
+    <div class="cd"><div class="ct">Settings</div>
+      <div class="frw"><label>Enabled</label><label class="tg"><input type="checkbox" checked/><span></span></label></div>
+      <div class="frw"><label>Channel</label><select style="width:140px"><option>#welcome</option></select></div>
+      <div class="frw"><label>Ping User</label><label class="tg"><input type="checkbox" checked/><span></span></label></div>
+    </div>
+    <div class="cd"><div class="ct">Embed <small>Use {user} {server} {count}</small></div>
+      <div class="frw"><label>Title</label><input type="text" value="Welcome to {server}!" style="width:170px"/></div>
+      <div class="frw"><label>Color</label><input type="color" value="#57F287" style="width:55px;height:28px"/></div>
+      <div class="frw"><label>Footer</label><input type="text" value="Enjoy your stay!" style="width:170px"/></div>
+    </div>
+    <div class="cd" style="border-top:2px solid var(--acc)">
+      <div class="ct">Test</div>
+      <button class="btn bs" style="font-size:11px">🧪 Send Test Welcome</button>
+    </div>
+  </div>
+
+  <!-- AUTO ROLES -->
+  <div class="pg" id="pg-autoroles">
+    <div class="ph"><h2>🎭 Auto Roles</h2><button class="btn bp">+ Add Role</button></div>
+    <div class="cd">
+      <div class="rw"><div style="width:26px;height:26px;border-radius:50%;background:linear-gradient(135deg,var(--acc),#eb459e);display:flex;align-items:center;justify-content:center;font-size:11px;flex-shrink:0">🎭</div><div class="ri"><div class="rt">@Member</div><div class="rm">All new members</div></div><button class="btn bxs bx">Remove</button></div>
+      <div class="rw"><div style="width:26px;height:26px;border-radius:50%;background:linear-gradient(135deg,var(--acc),#eb459e);display:flex;align-items:center;justify-content:center;font-size:11px;flex-shrink:0">🎭</div><div class="ri"><div class="rt">@Unverified</div><div class="rm">Pending verification</div></div><button class="btn bxs bx">Remove</button></div>
+    </div>
+  </div>
+
+  <!-- REACTION ROLES -->
+  <div class="pg" id="pg-reactionroles">
+    <div class="ph"><h2>⭐ Reaction Roles</h2><button class="btn bp">+ New Panel</button></div>
+    <div class="rrc">
+      <div class="rrh">
+        <div><div class="rrt">🎭 Grab Your Roles</div><div style="font-size:10px;color:var(--txt3)">ID: <code>rr_abc1</code> · #role-select</div></div>
+        <div style="display:flex;gap:4px"><button class="btn bxs bs">+ Add</button><button class="btn bxs bx">🗑️</button></div>
+      </div>
+      <div class="rri"><span style="font-size:16px;width:22px;text-align:center">🎮</span><div style="flex:1;font-size:11px;color:var(--txt)">@Gamer <span style="color:var(--txt3)">Gaming</span></div><button class="btn bxs bx">✕</button></div>
+      <div class="rri"><span style="font-size:16px;width:22px;text-align:center">🎵</span><div style="flex:1;font-size:11px;color:var(--txt)">@Music Fan <span style="color:var(--txt3)">Music</span></div><button class="btn bxs bx">✕</button></div>
+      <div class="rri"><span style="font-size:16px;width:22px;text-align:center">💻</span><div style="flex:1;font-size:11px;color:var(--txt)">@Developer <span style="color:var(--txt3)">Tech</span></div><button class="btn bxs bx">✕</button></div>
+    </div>
+    <div class="rrc">
+      <div class="rrh">
+        <div><div class="rrt">🌍 Region Roles</div><div style="font-size:10px;color:var(--txt3)">ID: <code>rr_xyz2</code> · #regions</div></div>
+        <div style="display:flex;gap:4px"><button class="btn bxs bs">+ Add</button><button class="btn bxs bx">🗑️</button></div>
+      </div>
+      <div class="rri"><span style="font-size:16px;width:22px;text-align:center">🇺🇸</span><div style="flex:1;font-size:11px;color:var(--txt)">@NA</div><button class="btn bxs bx">✕</button></div>
+      <div class="rri"><span style="font-size:16px;width:22px;text-align:center">🇪🇺</span><div style="flex:1;font-size:11px;color:var(--txt)">@EU</div><button class="btn bxs bx">✕</button></div>
+    </div>
+  </div>
+
+  <!-- RULES -->
+  <div class="pg" id="pg-rules">
+    <div class="ph"><h2>📜 Rules</h2><button class="btn bp">+ New Panel</button></div>
+    <div class="rlc">
+      <div class="rlh">
+        <div><div class="rlt">📜 Server Rules</div><div style="font-size:10px;color:var(--txt3)">ID: <code>rl_def4</code> · #rules</div></div>
+        <div style="display:flex;gap:4px"><button class="btn bxs bs">+ Rule</button><button class="btn bxs bx">🗑️</button></div>
+      </div>
+      <div class="rli"><div class="rln">1</div><div style="flex:1"><div style="font-size:11px;font-weight:600;color:var(--white)">Be Respectful</div><div style="font-size:10px;color:var(--txt3);margin-top:1px">No harassment, hate speech, or discrimination.</div></div><button class="btn bxs bx">✕</button></div>
+      <div class="rli"><div class="rln">2</div><div style="flex:1"><div style="font-size:11px;font-weight:600;color:var(--white)">No Spam</div><div style="font-size:10px;color:var(--txt3);margin-top:1px">Keep conversations clean and on-topic.</div></div><button class="btn bxs bx">✕</button></div>
+      <div class="rli"><div class="rln">3</div><div style="flex:1"><div style="font-size:11px;font-weight:600;color:var(--white)">No Advertising</div><div style="font-size:10px;color:var(--txt3);margin-top:1px">No unsolicited server or product promotions.</div></div><button class="btn bxs bx">✕</button></div>
+      <div class="rli"><div class="rln">4</div><div style="flex:1"><div style="font-size:11px;font-weight:600;color:var(--white)">Follow Discord ToS</div><div style="font-size:10px;color:var(--txt3);margin-top:1px">Adhere to Discord's Terms of Service always.</div></div><button class="btn bxs bx">✕</button></div>
+      <div class="rli"><div class="rln">5</div><div style="flex:1"><div style="font-size:11px;font-weight:600;color:var(--white)">Staff Decisions Final</div><div style="font-size:10px;color:var(--txt3);margin-top:1px">Respect mod decisions. Open a ticket to appeal.</div></div><button class="btn bxs bx">✕</button></div>
+    </div>
+  </div>
+
+  <!-- EXPORT / IMPORT -->
+  <div class="pg" id="pg-exportimport">
+    <div class="ph"><h2>💾 Export / Import</h2><p>Back up and restore all bot settings</p></div>
+    <div class="ec bl">
+      <div style="font-family:'Rajdhani',sans-serif;font-size:14px;font-weight:700;color:var(--white);margin-bottom:8px">📤 Export Configuration</div>
+      <p style="font-size:11px;color:var(--txt2);line-height:1.6;margin-bottom:12px">Downloads a JSON backup of all 9 modules — tickets, automod, welcome, reaction roles, rules, server logs, and temp voice.</p>
+      <button class="btn bp" style="font-size:11px">📤 Download Export File</button>
+    </div>
+    <div class="ec yl">
+      <div style="font-family:'Rajdhani',sans-serif;font-size:14px;font-weight:700;color:var(--white);margin-bottom:8px">📥 Import Configuration</div>
+      <p style="font-size:11px;color:var(--txt2);line-height:1.6;margin-bottom:12px">Restore from a previously exported file. Will <strong style="color:var(--red)">overwrite</strong> existing settings.</p>
+      <button class="btn bs" style="font-size:11px">📂 Choose File</button>
+    </div>
+    <div class="cd"><div class="ct">What Gets Exported</div>
+      <div class="eg">
+        <div class="ei"><span style="font-size:16px">🎫</span><div><div class="ein">Ticket System</div><div class="eid">Panels, categories, questions</div></div></div>
+        <div class="ei"><span style="font-size:16px">🛡️</span><div><div class="ein">AutoMod</div><div class="eid">All filters and word lists</div></div></div>
+        <div class="ei"><span style="font-size:16px">👋</span><div><div class="ein">Welcome + Auto Roles</div><div class="eid">Embed and role settings</div></div></div>
+        <div class="ei"><span style="font-size:16px">⭐</span><div><div class="ein">Reaction Roles</div><div class="eid">Panels and mappings</div></div></div>
+        <div class="ei"><span style="font-size:16px">📜</span><div><div class="ein">Rules Panels</div><div class="eid">All rules text</div></div></div>
+        <div class="ei"><span style="font-size:16px">📋</span><div><div class="ein">Server Logs</div><div class="eid">Channels and toggles</div></div></div>
+        <div class="ei"><span style="font-size:16px">🎙️</span><div><div class="ein">Temp Voice</div><div class="eid">Hub and category config</div></div></div>
+      </div>
+    </div>
+  </div>
+
+  </div><!-- /inn -->
+  </div><!-- /scroll -->
+</div><!-- /main -->
+</div><!-- /shell -->
+
+<script>
+const T={overview:'🏠 Overview',announcements:'📢 Announcements',tickets:'🎫 Tickets',automod:'🛡️ AutoMod',tempvoice:'🎙️ Temp Voice',serverlogs:'📋 Server Logs',welcome:'👋 Welcome',autoroles:'🎭 Auto Roles',reactionroles:'⭐ Reaction Roles',rules:'📜 Rules',exportimport:'💾 Export / Import'};
+function go(p,el){
+  document.querySelectorAll('.pg').forEach(x=>x.classList.remove('active'));
+  document.querySelectorAll('.ni').forEach(x=>x.classList.remove('active'));
+  document.getElementById('pg-'+p)?.classList.add('active');
+  document.getElementById('tbt').textContent=T[p]??p;
+  if(el)el.classList.add('active');
+  else document.querySelectorAll('.ni').forEach(x=>{if(x.dataset.p===p)x.classList.add('active');});
+  closeSb();
+  window.scrollTo({top:0,behavior:'instant'});
+}
+function swTab(btn,id){
+  btn.closest('.pg').querySelectorAll('.tp').forEach(x=>x.classList.remove('active'));
+  btn.closest('.tabs').querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+  document.getElementById(id)?.classList.add('active');
+  btn.classList.add('active');
+}
+function toggleSb(){
+  const open=document.getElementById('sb').classList.toggle('open');
+  document.getElementById('bd').classList.toggle('open',open);
+}
+function closeSb(){
+  document.getElementById('sb').classList.remove('open');
+  document.getElementById('bd').classList.remove('open');
+}
+</script>
+</body>
+</html>
