@@ -223,9 +223,9 @@ export class AutoModModule extends BaseModule {
         await message.delete().catch(() => {});
         break;
       case 'warn':
-        await message.channel.send({
+        await (message.channel as import('discord.js').TextChannel).send({
           embeds: [new EmbedBuilder().setColor(0xFEE75C).setDescription(`⚠️ ${message.author} — ${reason}`)],
-        }).then(m => setTimeout(() => m.delete().catch(() => {}), 5000));
+        }).then((m: import('discord.js').Message) => setTimeout(() => m.delete().catch(() => {}), 5000));
         break;
       case 'mute':
         await member.timeout((cfg.spam_mute_duration ?? 5) * 60 * 1000, reason).catch(() => {});
