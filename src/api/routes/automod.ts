@@ -57,11 +57,12 @@ export function automodRouter(client: Client, db: DatabaseSync) {
   // Get warnings for a guild
   router.get('/:guildId/warnings', requireGuild, (req, res) => {
     const { userId, limit = '50' } = req.query;
+    const limitNum = parseInt(limit as string);
     const rows = userId
       ? db.prepare('SELECT * FROM automod_warnings WHERE guild_id = ? AND user_id = ? ORDER BY created_at DESC LIMIT ?')
-          .all(req.params.guildId, userId, parseInt(limit as string))
+          .all(req.params.guildId, String(userId), limitNum)
       : db.prepare('SELECT * FROM automod_warnings WHERE guild_id = ? ORDER BY created_at DESC LIMIT ?')
-          .all(req.params.guildId, parseInt(limit as string));
+          .all(req.params.guildId, limitNum);
     res.json(rows);
   });
 
