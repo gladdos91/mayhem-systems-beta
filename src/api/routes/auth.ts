@@ -4,9 +4,11 @@ import { Client } from 'discord.js';
 import { DatabaseSync } from 'node:sqlite';
 import { config } from '../../config';
 
-const DISCORD_API   = 'https://discord.com/api/v10';
-const SCOPES        = 'identify guilds';
-const REDIRECT_URI  = `${config.panelUrl}/auth/callback`;
+const DISCORD_API  = 'https://discord.com/api/v10';
+const SCOPES       = 'identify guilds';
+
+// Use explicit DISCORD_CALLBACK_URL if set, otherwise build from panelUrl
+const REDIRECT_URI = config.callbackUrl ?? `${config.panelUrl}/auth/discord/callback`;
 
 export function authRouter(client: Client, _db: DatabaseSync) {
   const router = Router();
@@ -22,8 +24,8 @@ export function authRouter(client: Client, _db: DatabaseSync) {
     res.redirect(`https://discord.com/api/oauth2/authorize?${params}`);
   });
 
-  // ── Step 2: Handle callback ──────────────────────────────────────
-  router.get('/callback', async (req, res) => {
+  // ── Step 2: Handle callback (/auth/discord/callback) ─────────────
+  router.get('/discord/callback', async (req, res) => {
     const code = req.query.code as string;
     if (!code) return res.redirect('/?error=no_code');
 
