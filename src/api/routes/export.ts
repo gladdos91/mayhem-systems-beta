@@ -289,7 +289,6 @@ export function exportRouter(client: Client, db: DatabaseSync) {
           `).run(guildId, v.hub_channel_id, v.category_id, v.default_limit ?? 0);
           results.temp_voice = 'imported';
         }
-      });
 
         db.exec('COMMIT');
       } catch (txErr: any) {
