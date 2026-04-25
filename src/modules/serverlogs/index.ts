@@ -153,7 +153,7 @@ export class ServerLogsModule extends BaseModule {
     // Fetch audit log for ban reason
     let reason = ban.reason ?? 'No reason provided';
     try {
-      const logs = await ban.guild.fetchAuditLogs({ type: AuditLogEvent.MemberBan, limit: 1 });
+      const logs = await ban.guild.fetchAuditLogs({ type: AuditLogEvent.MemberBanAdd, limit: 1 });
       const entry = logs.entries.first();
       if (entry?.target?.id === ban.user.id) reason = entry.reason ?? reason;
     } catch {}
