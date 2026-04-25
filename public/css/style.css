@@ -22,7 +22,7 @@
 
 /* ── Reset ──────────────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-html, body { min-height: 100%; font-family: 'DM Sans', sans-serif; font-size: 14px; background: var(--bg-primary); color: var(--text-primary); }
+html, body { font-family: 'DM Sans', sans-serif; font-size: 14px; background: var(--bg-primary); color: var(--text-primary); }
 a { color: inherit; text-decoration: none; }
 input, select, textarea, button { font-family: inherit; font-size: 14px; }
 button { cursor: pointer; }
@@ -31,7 +31,7 @@ button { cursor: pointer; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 
 /* ── LOGIN ──────────────────────────────────────────────────── */
-.page { min-height: 100vh; }
+.page { display: block; }
 .login-wrap { height: 100vh; display: flex; align-items: center; justify-content: center; background: var(--bg-primary); background-image: radial-gradient(ellipse at 20% 50%,rgba(88,101,242,.12) 0%,transparent 60%); }
 .login-card { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 16px; padding: 44px 40px; width: 400px; text-align: center; box-shadow: var(--shadow); }
 .login-logo .logo-icon { font-size: 46px; margin-bottom: 12px; }
@@ -43,10 +43,20 @@ button { cursor: pointer; }
 .btn-discord:hover { background: var(--accent-hover); }
 
 /* ── DASHBOARD ──────────────────────────────────────────────── */
-#page-dashboard { display: flex; min-height: 100vh; position: relative; }
+/* Dashboard layout handled by fixed sidebar + margin */
 
 /* ── SIDEBAR ────────────────────────────────────────────────── */
-.sidebar { width: var(--sidebar-w); min-width: var(--sidebar-w); background: #2b2d31; border-right: 1px solid var(--border); display: flex; flex-direction: column; height: 100vh; position: sticky; top: 0; flex-shrink: 0; z-index: 50; }
+.sidebar {
+  position: fixed;
+  left: 0; top: 0; bottom: 0;
+  width: var(--sidebar-w);
+  background: #2b2d31;
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  z-index: 50;
+  overflow: hidden;
+}
 .sidebar-header { padding: 16px 14px 10px; display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
 .logo-mark { width: 34px; height: 34px; border-radius: 9px; background: linear-gradient(135deg,#5865f2,#eb459e); display: flex; align-items: center; justify-content: center; font-size: 17px; flex-shrink: 0; }
 .logo-name { font-family: 'Rajdhani', sans-serif; font-size: 16px; font-weight: 700; color: var(--text-header); line-height: 1.1; }
@@ -84,7 +94,12 @@ button { cursor: pointer; }
 .logout-btn:hover { color: var(--red); }
 
 /* ── MAIN CONTENT ───────────────────────────────────────────── */
-.main-content { flex: 1; min-width: 0; padding: 32px 36px; background: var(--bg-primary); min-height: 100vh; }
+.main-content {
+  margin-left: var(--sidebar-w);
+  padding: 28px 32px;
+  background: var(--bg-primary);
+  min-height: 100vh;
+}
 .content-page { max-width: 960px; margin: 0 auto; }
 
 /* ── PAGE HEADER ────────────────────────────────────────────── */
@@ -250,24 +265,20 @@ select option { background: var(--bg-secondary); }
 
 /* ── MOBILE ─────────────────────────────────────────────────── */
 @media (max-width: 700px) {
-  /* Sidebar becomes off-canvas drawer */
+  /* Sidebar hidden off-canvas by default on mobile */
   .sidebar {
-    position: fixed !important;
-    left: 0; top: 0; bottom: 0;
     transform: translateX(-100%);
     transition: transform .28s cubic-bezier(.4,0,.2,1);
-    z-index: 50;
-    background: #2b2d31 !important;
     box-shadow: 4px 0 28px rgba(0,0,0,.8);
   }
   .sidebar.open { transform: translateX(0); }
 
+  /* Main content takes full width on mobile */
+  .main-content { margin-left: 0; padding: 16px 14px 24px; }
+
   /* Show hamburger and topbar */
   .hamburger-btn { display: flex !important; align-items: center; justify-content: center; }
   .mobile-topbar { display: flex; }
-
-  /* Main content fills screen */
-  .main-content { padding: 16px 14px 24px; min-height: calc(100vh - 52px); }
 
   /* Responsive grids */
   .stats-grid { grid-template-columns: 1fr 1fr; gap: 10px; }
