@@ -332,9 +332,9 @@ async function deployPanel(panelId) {
     const result = await api(`/api/tickets/${S.guildId}/panels/${panelId}/deploy`, { method: 'POST' });
     if (result.success) {
       toast('✅ Panel deployed to Discord!', 'success');
-      loadTicketPanels(); // refresh to show updated state
+      loadTicketPanels();
     } else {
-      toast('Deploy failed — check the bot has access to the channel.', 'error');
+      toast(result.error ?? 'Deploy failed', 'error');
     }
   } catch (e) { toast(e.message, 'error'); }
 }
