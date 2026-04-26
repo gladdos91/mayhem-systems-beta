@@ -879,31 +879,45 @@ export class TicketsModule extends BaseModule {
     const html = this.buildTranscriptHTML(channel.name, sorted, ticket);
     if (ticket) db.prepare('UPDATE tickets SET transcript = ? WHERE channel_id = ?').run(html, channel.id);
 
-    // Build a clean embed instead of dumping raw HTML in chat
-    const embed = new EmbedBuilder()
-      .setColor(0x5865F2)
-      .setTitle('📄 Transcript Ready')
-      .setDescription(`Transcript for **#${channel.name}** has been generated.`)
-      .addFields(
-        { name: 'Ticket #', value: ticket?.ticket_number?.toString() ?? '—', inline: true },
-        { name: 'Status',   value: ticket?.status ?? '—',                    inline: true },
-        { name: 'Messages', value: sorted.length.toString(),                  inline: true },
-      )
-      .setFooter({ text: 'Download the HTML file below to view the full transcript.' })
-      .setTimestamp();
+    const fileAttachment = { attachment: Buffer.from(html), name: `${channel.name}-transcript.html` };
 
+    // Try to DM the file to the user — Discord won't show code preview in DMs
+    let dmSent = false;
+    try {
+      const dm = await interaction.user.createDM();
+      await dm.send({
+        embeds: [new EmbedBuilder()
+          .setColor(0x5865F2)
+          .setTitle('📄 Transcript — #' + channel.name)
+          .setDescription('Open the attached file in your browser to view the full conversation.')
+          .addFields(
+            { name: 'Ticket #',  value: ticket?.ticket_number?.toString() ?? '—', inline: true },
+            { name: 'Messages',  value: sorted.length.toString(),                  inline: true },
+          )
+          .setTimestamp()],
+        files: [fileAttachment],
+      });
+      dmSent = true;
+    } catch { /* DMs disabled */ }
+
+    // Ephemeral reply to the requester
     await interaction.editReply({
-      embeds: [embed],
-      files: [{ attachment: Buffer.from(html), name: `${channel.name}-transcript.html` }],
+      embeds: [new EmbedBuilder()
+        .setColor(dmSent ? 0x3BA55C : 0xFAA61A)
+        .setTitle(dmSent ? '✅ Transcript sent to your DMs!' : '📄 Transcript ready')
+        .setDescription(dmSent
+          ? 'Check your direct messages — the HTML file is there.\nOpen it in a browser to view the full transcript.'
+          : "Your DMs appear to be disabled. The file is attached below.")
+        .setTimestamp()],
+      files: dmSent ? [] : [fileAttachment],
     });
 
-    // Post clean notification to the ticket channel — no file attached so Discord doesn't preview raw HTML
+    // Clean embed in the ticket channel — no file attached
     await channel.send({
       embeds: [new EmbedBuilder()
         .setColor(0x5865F2)
         .setTitle('📄 Transcript Generated')
-        .setDescription(`Transcript created by <@${interaction.user.id}>. Check your DMs/ephemeral message to download it.`)
-        .addFields({ name: 'Messages captured', value: sorted.length.toString(), inline: true })
+        .setDescription(`Transcript created by <@${interaction.user.id}> · ${sorted.length} messages captured.`)
         .setTimestamp()],
     });
   }
