@@ -879,50 +879,108 @@ export class TicketsModule extends BaseModule {
     const html = this.buildTranscriptHTML(channel.name, sorted, ticket);
     if (ticket) db.prepare('UPDATE tickets SET transcript = ? WHERE channel_id = ?').run(html, channel.id);
 
+    // Build a clean embed instead of dumping raw HTML in chat
+    const embed = new EmbedBuilder()
+      .setColor(0x5865F2)
+      .setTitle('📄 Transcript Ready')
+      .setDescription(`Transcript for **#${channel.name}** has been generated.`)
+      .addFields(
+        { name: 'Ticket #', value: ticket?.ticket_number?.toString() ?? '—', inline: true },
+        { name: 'Status',   value: ticket?.status ?? '—',                    inline: true },
+        { name: 'Messages', value: sorted.length.toString(),                  inline: true },
+      )
+      .setFooter({ text: 'Download the HTML file below to view the full transcript.' })
+      .setTimestamp();
+
     await interaction.editReply({
-      content: '📄 Transcript generated!',
+      embeds: [embed],
+      files: [{ attachment: Buffer.from(html), name: `${channel.name}-transcript.html` }],
+    });
+
+    // Also post to the ticket channel (non-ephemeral) so staff can see it
+    await channel.send({
+      embeds: [new EmbedBuilder()
+        .setColor(0x5865F2)
+        .setTitle('📄 Transcript Generated')
+        .setDescription(`Transcript created by <@${interaction.user.id}>.`)
+        .setTimestamp()],
       files: [{ attachment: Buffer.from(html), name: `${channel.name}-transcript.html` }],
     });
   }
 
   private buildTranscriptHTML(channelName: string, messages: any[], ticket?: any): string {
-    const rows = messages.map(m => `
+    const rows = messages.map(m => {
+      const avatar = m.author.displayAvatarURL({ size: 32, extension: 'png' });
+      const content = m.content
+        ? m.content.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br/>')
+        : '';
+      const attachments = [...m.attachments.values()].map((a: any) =>
+        a.contentType?.startsWith('image/')
+          ? `<img src="${a.url}" style="max-width:300px;max-height:200px;border-radius:4px;margin-top:6px;display:block"/>`
+          : `<a href="${a.url}" style="color:#7289da">${a.name}</a>`
+      ).join('');
+      const embeds = m.embeds.length ? `<div style="font-size:11px;color:#72767d;margin-top:4px">[${m.embeds.length} embed(s)]</div>` : '';
+      return `
       <div class="msg">
-        <img class="av" src="${m.author.displayAvatarURL({ size: 32, extension: 'png' })}"/>
+        <img class="av" src="${avatar}" onerror="this.src='https://cdn.discordapp.com/embed/avatars/0.png'"/>
         <div class="body">
-          <span class="author">${m.author.tag}</span>
-          <span class="ts">${m.createdAt.toISOString()}</span>
-          <div class="content">${m.content || '<em class="muted">[embed / attachment]</em>'}</div>
+          <span class="author" style="color:${m.author.bot ? '#5865f2' : '#fff'}">${m.author.username}${m.author.bot ? ' <span class="bot-tag">APP</span>' : ''}</span>
+          <span class="ts">${new Date(m.createdTimestamp).toLocaleString()}</span>
+          ${content ? `<div class="content">${content}</div>` : ''}
+          ${attachments}${embeds}
         </div>
-      </div>`).join('');
+      </div>`;
+    }).join('');
 
     const statsRow = ticket ? `
       <div class="stats">
         <div class="stat"><div class="k">Ticket #</div><div class="v">${ticket.ticket_number}</div></div>
-        <div class="stat"><div class="k">Status</div><div class="v">${ticket.status}</div></div>
-        <div class="stat"><div class="k">Priority</div><div class="v">${ticket.priority}</div></div>
-        <div class="stat"><div class="k">Created</div><div class="v">${new Date(ticket.created_at * 1000).toUTCString()}</div></div>
+        <div class="stat"><div class="k">Status</div><div class="v" style="text-transform:capitalize">${ticket.status}</div></div>
+        <div class="stat"><div class="k">Priority</div><div class="v" style="text-transform:capitalize">${ticket.priority ?? 'None'}</div></div>
+        <div class="stat"><div class="k">Created</div><div class="v">${new Date((ticket.created_at ?? 0) * 1000).toLocaleString()}</div></div>
+        <div class="stat"><div class="k">Messages</div><div class="v">${messages.length}</div></div>
       </div>` : '';
 
-    return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${channelName} — Mayhem Transcript</title>
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>#${channelName} — Mayhem Transcript</title>
 <style>
-  body{font-family:sans-serif;background:#36393f;color:#dcddde;margin:0;padding:0}
-  .header{background:#202225;padding:20px 24px;border-bottom:1px solid #40444b}
-  .header h1{margin:0;font-size:20px;color:#fff} .header p{margin:4px 0 0;color:#72767d;font-size:13px}
-  .stats{display:flex;gap:16px;padding:14px 24px;background:#2f3136;border-bottom:1px solid #40444b;flex-wrap:wrap}
-  .stat{background:#36393f;padding:8px 14px;border-radius:6px} .k{font-size:10px;color:#72767d;text-transform:uppercase} .v{font-size:14px;color:#fff;font-weight:600}
-  .msgs{padding:16px 24px}
-  .msg{display:flex;gap:12px;margin-bottom:14px}
-  .av{width:36px;height:36px;border-radius:50%;flex-shrink:0}
-  .body .author{font-weight:700;color:#fff;margin-right:8px} .body .ts{font-size:11px;color:#72767d}
-  .content{margin-top:4px;line-height:1.5} .muted{color:#72767d}
-  .footer{text-align:center;padding:20px;color:#72767d;font-size:12px;border-top:1px solid #40444b}
-</style></head>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'gg sans','Helvetica Neue',sans-serif;background:#313338;color:#dbdee1;font-size:14px;line-height:1.4}
+  .header{background:#1e1f22;padding:20px 28px;border-bottom:2px solid #5865f2;display:flex;align-items:center;gap:14px}
+  .header-icon{width:42px;height:42px;background:#5865f2;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0}
+  .header h1{font-size:18px;color:#fff;font-weight:700}
+  .header p{font-size:12px;color:#949ba4;margin-top:3px}
+  .stats{display:flex;gap:10px;padding:12px 28px;background:#2b2d31;border-bottom:1px solid #404249;flex-wrap:wrap}
+  .stat{background:#1e1f22;padding:8px 14px;border-radius:6px;border-left:3px solid #5865f2}
+  .k{font-size:9px;color:#949ba4;text-transform:uppercase;letter-spacing:.06em;margin-bottom:2px}
+  .v{font-size:14px;color:#fff;font-weight:600}
+  .msgs{padding:16px 28px;max-width:900px}
+  .msg{display:flex;gap:14px;margin-bottom:16px;padding:4px 8px;border-radius:4px}
+  .msg:hover{background:#2e3035}
+  .av{width:38px;height:38px;border-radius:50%;flex-shrink:0;margin-top:2px}
+  .body{flex:1;min-width:0}
+  .author{font-weight:600;color:#fff;margin-right:8px}
+  .bot-tag{background:#5865f2;color:#fff;font-size:9px;font-weight:700;padding:1px 4px;border-radius:3px;margin-left:3px;vertical-align:middle}
+  .ts{font-size:11px;color:#949ba4}
+  .content{margin-top:3px;color:#dbdee1;white-space:pre-wrap;word-break:break-word}
+  .footer{text-align:center;padding:24px;color:#949ba4;font-size:12px;border-top:1px solid #404249;margin-top:16px}
+</style>
+</head>
 <body>
-<div class="header"><h1>#${channelName} — Transcript</h1><p>Generated by Mayhem Systems Discord Control · ${messages.length} messages</p></div>
+<div class="header">
+  <div class="header-icon">📋</div>
+  <div>
+    <h1>#${channelName} — Transcript</h1>
+    <p>Generated by Mayhem Systems Discord Control · ${new Date().toLocaleString()}</p>
+  </div>
+</div>
 ${statsRow}
 <div class="msgs">${rows}</div>
-<div class="footer">Mayhem Systems Discord Control · ${new Date().toUTCString()}</div>
+<div class="footer">Mayhem Systems Discord Control · ${messages.length} message${messages.length !== 1 ? 's' : ''}</div>
 </body></html>`;
   }
 
