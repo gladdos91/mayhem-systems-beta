@@ -4,7 +4,7 @@
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
   <title>Mayhem System's V2 — Dashboard</title>
-  <link rel="stylesheet" href="/css/style.css?v=3"/>
+  <link rel="stylesheet" href="/css/style.css?v=4"/>
   <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@600;700&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet"/>
 </head>
 <body>
@@ -46,7 +46,7 @@
   <!-- ── Sidebar ── -->
   <aside class="sidebar" id="sidebar">
     <div class="sidebar-header">
-      <img src="/logo.png" alt="Mayhem Systems" style="height:34px;object-fit:contain;max-width:200px"/>
+      <img src="/logo.png" alt="Mayhem Systems" style="height:48px;width:auto;object-fit:contain;max-width:210px"/>
     </div>
 
     <div class="guild-selector" id="guild-selector">
@@ -119,14 +119,105 @@
     <div class="content-page hidden" id="view-tickets">
       <div class="page-header">
         <h2>🎫 Tickets</h2>
-        <div class="filter-bar">
-          <button class="filter-btn active" onclick="filterTickets('all',this)">All</button>
-          <button class="filter-btn" onclick="filterTickets('open',this)">Open</button>
-          <button class="filter-btn" onclick="filterTickets('closed',this)">Closed</button>
+        <button class="btn btn-primary" onclick="openModal('modal-create-panel')">+ New Panel</button>
+      </div>
+
+      <div class="tabs">
+        <button class="tab active" data-tab="tk-panels" onclick="switchTab('tk',this)">Panels</button>
+        <button class="tab" data-tab="tk-tickets" onclick="switchTab('tk',this)">Tickets</button>
+        <button class="tab" data-tab="tk-blacklist" onclick="switchTab('tk',this)">Blacklist</button>
+      </div>
+
+      <!-- PANELS TAB -->
+      <div id="tk-panels" class="tab-content">
+        <div id="ticket-panels-list">
+          <div class="empty-state">Select a server to manage ticket panels.</div>
         </div>
       </div>
-      <div class="stats-row"><div class="mini-stat"><span id="ts-open">—</span> Open</div><div class="mini-stat"><span id="ts-closed">—</span> Closed</div><div class="mini-stat"><span id="ts-today">—</span> Today</div></div>
-      <div class="card"><div id="ticket-list"><div class="empty-state">Select a server to view tickets.</div></div></div>
+
+      <!-- TICKETS TAB -->
+      <div id="tk-tickets" class="tab-content hidden">
+        <div class="page-header" style="margin-bottom:12px">
+          <div class="filter-bar">
+            <button class="filter-btn active" onclick="filterTickets('all',this)">All</button>
+            <button class="filter-btn" onclick="filterTickets('open',this)">Open</button>
+            <button class="filter-btn" onclick="filterTickets('closed',this)">Closed</button>
+          </div>
+        </div>
+        <div class="stats-row">
+          <div class="mini-stat"><span id="ts-open">—</span> Open</div>
+          <div class="mini-stat"><span id="ts-closed">—</span> Closed</div>
+          <div class="mini-stat"><span id="ts-today">—</span> Today</div>
+        </div>
+        <div class="card"><div id="ticket-list"><div class="empty-state">Select a server to view tickets.</div></div></div>
+      </div>
+
+      <!-- BLACKLIST TAB -->
+      <div id="tk-blacklist" class="tab-content hidden">
+        <div class="card">
+          <div id="ticket-blacklist-list"><div class="empty-state">No blacklisted users.</div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- MODAL: Create Panel -->
+    <div class="modal-overlay hidden" id="modal-create-panel">
+      <div class="modal-card" style="max-width:460px">
+        <div class="modal-header"><h3>New Ticket Panel</h3><button class="modal-close" onclick="closeModal('modal-create-panel')">✕</button></div>
+        <div class="form-row"><label>Panel Title</label><input type="text" id="cp-title" placeholder="e.g. Server Support"/></div>
+        <div class="form-row"><label>Description</label><input type="text" id="cp-description" placeholder="Click below to open a ticket"/></div>
+        <div class="form-row"><label>Channel</label><select id="cp-channel"><option value="">Select channel...</option></select></div>
+        <div class="form-row"><label>Style</label>
+          <select id="cp-style">
+            <option value="buttons">Buttons (one button per category)</option>
+            <option value="dropdown">Dropdown menu</option>
+          </select>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" onclick="closeModal('modal-create-panel')">Cancel</button>
+          <button class="btn btn-primary" onclick="createPanel()">Create Panel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- MODAL: Add Category -->
+    <div class="modal-overlay hidden" id="modal-add-category">
+      <div class="modal-card" style="max-width:500px">
+        <div class="modal-header"><h3>Add Category</h3><button class="modal-close" onclick="closeModal('modal-add-category')">✕</button></div>
+        <input type="hidden" id="ac-panel-id"/>
+        <div class="form-row"><label>Label</label><input type="text" id="ac-label" placeholder="e.g. Space Engineers Support"/></div>
+        <div class="form-row"><label>Description</label><input type="text" id="ac-description" placeholder="Open a support ticket"/></div>
+        <div class="form-row"><label>Emoji</label><input type="text" id="ac-emoji" placeholder="🎫" style="width:80px"/></div>
+        <div class="form-row"><label>Channel Prefix</label><input type="text" id="ac-prefix" placeholder="ticket-" style="width:140px"/></div>
+        <div class="form-row"><label>Admin Roles <small>(comma separated IDs)</small></label><input type="text" id="ac-admin-roles" placeholder="roleId1,roleId2"/></div>
+        <div class="form-row"><label>Autoclose after (hours, 0=off)</label><input type="number" id="ac-autoclose" value="0" min="0" style="width:90px"/></div>
+        <div class="form-row"><label>Per-user ticket limit</label><input type="number" id="ac-limit" value="1" min="1" style="width:90px"/></div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" onclick="closeModal('modal-add-category')">Cancel</button>
+          <button class="btn btn-primary" onclick="addCategory()">Add Category</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- MODAL: Add Question -->
+    <div class="modal-overlay hidden" id="modal-add-question">
+      <div class="modal-card" style="max-width:460px">
+        <div class="modal-header"><h3>Add Question</h3><button class="modal-close" onclick="closeModal('modal-add-question')">✕</button></div>
+        <input type="hidden" id="aq-category-id"/>
+        <div class="form-row"><label>Question Label</label><input type="text" id="aq-label" placeholder="What is your issue?"/></div>
+        <div class="form-row"><label>Placeholder</label><input type="text" id="aq-placeholder" placeholder="Describe in detail..."/></div>
+        <div class="form-row"><label>Style</label>
+          <select id="aq-style">
+            <option value="short">Short (single line)</option>
+            <option value="paragraph">Paragraph (multi-line)</option>
+          </select>
+        </div>
+        <div class="form-row"><label>Required</label><label class="toggle"><input type="checkbox" id="aq-required" checked/><span></span></label></div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" onclick="closeModal('modal-add-question')">Cancel</button>
+          <button class="btn btn-primary" onclick="addQuestion()">Add Question</button>
+        </div>
+      </div>
     </div>
 
     <!-- AUTOMOD -->
@@ -452,6 +543,6 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 });
 </script>
-<script src="/js/app.js?v=3"></script>
+<script src="/js/app.js?v=4"></script>
 </body>
 </html>
