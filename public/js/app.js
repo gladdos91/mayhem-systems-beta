@@ -154,6 +154,9 @@ function populateSelects() {
   const rrIr  = $('rr-item-role'); if (rrIr) rrIr.innerHTML = S.roles.map(r=>`<option value="${r.id}">@${escHtml(r.name)}</option>`).join('');
   // Ticket panel channel
   const cpCh  = $('cp-channel');  if (cpCh) cpCh.innerHTML = '<option value="">Select channel...</option>' + textOpts;
+  // Ticket category admin roles (multi-select)
+  const acRoles = $('ac-admin-roles');
+  if (acRoles) acRoles.innerHTML = S.roles.filter(r => r.name !== '@everyone').map(r=>`<option value="${r.id}">@${escHtml(r.name)}</option>`).join('');
   // Rules panel channel
   const rpCh  = $('rp-channel');  if (rpCh) rpCh.innerHTML = textOpts;
 }
@@ -310,11 +313,11 @@ async function createPanel() {
   const title = $('cp-title').value.trim();
   const description = $('cp-description').value.trim();
   const channelId = $('cp-channel').value;
-  const style = $('cp-style').value;
+  const panelStyle = $('cp-style').value;
   if (!title) return toast('Title is required', 'error');
   if (!channelId) return toast('Select a channel', 'error');
   try {
-    await api(`/api/tickets/${S.guildId}/panels`, { method: 'POST', body: JSON.stringify({ title, description, channelId, style }) });
+    await api(`/api/tickets/${S.guildId}/panels`, { method: 'POST', body: JSON.stringify({ title, description, channelId, panelStyle }) });
     toast('Panel created!', 'success');
     closeModal('modal-create-panel');
     $('cp-title').value = ''; $('cp-description').value = ''; $('cp-channel').value = '';
@@ -325,8 +328,14 @@ async function createPanel() {
 async function deployPanel(panelId) {
   if (!confirm('Deploy this panel to Discord? This will post/update the panel message in the configured channel.')) return;
   try {
-    await api(`/api/tickets/${S.guildId}/panels/${panelId}/deploy`, { method: 'POST' });
-    toast('Panel deployed to Discord!', 'success');
+    toast('Deploying...', 'info');
+    const result = await api(`/api/tickets/${S.guildId}/panels/${panelId}/deploy`, { method: 'POST' });
+    if (result.success) {
+      toast('✅ Panel deployed to Discord!', 'success');
+      loadTicketPanels(); // refresh to show updated state
+    } else {
+      toast('Deploy failed — check the bot has access to the channel.', 'error');
+    }
   } catch (e) { toast(e.message, 'error'); }
 }
 
@@ -343,7 +352,14 @@ async function deletePanel(panelId) {
 function openAddCategory(panelId) {
   $('ac-panel-id').value = panelId;
   $('ac-label').value = ''; $('ac-description').value = ''; $('ac-emoji').value = '🎫';
-  $('ac-prefix').value = 'ticket-'; $('ac-admin-roles').value = '';
+  $('ac-prefix').value = 'ticket-';
+  // Clear multi-select selections
+  const sel = $('ac-admin-roles');
+  if (sel) Array.from(sel.options).forEach(o => o.selected = false);
+  // Re-populate roles in case they weren't loaded yet
+  if (sel && sel.options.length === 0 && S.roles.length) {
+    sel.innerHTML = S.roles.filter(r => r.name !== '@everyone').map(r=>`<option value="${r.id}">@${escHtml(r.name)}</option>`).join('');
+  }
   $('ac-autoclose').value = '0'; $('ac-limit').value = '1';
   openModal('modal-add-category');
 }
@@ -354,7 +370,9 @@ async function addCategory() {
   const description = $('ac-description').value.trim();
   const emoji = $('ac-emoji').value.trim();
   const channelPrefix = $('ac-prefix').value.trim() || 'ticket-';
-  const adminRoles = $('ac-admin-roles').value.trim();
+  // Collect selected role IDs from multi-select
+  const rolesEl = $('ac-admin-roles');
+  const adminRoles = rolesEl ? Array.from(rolesEl.selectedOptions).map(o => o.value) : [];
   const autocloseHours = parseInt($('ac-autoclose').value) || 0;
   const perUserLimit = parseInt($('ac-limit').value) || 1;
   if (!label) return toast('Label is required', 'error');
