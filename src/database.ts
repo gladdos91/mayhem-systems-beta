@@ -128,6 +128,7 @@ function createTables() {
       description         TEXT NOT NULL DEFAULT 'Select a ticket category below.',
       color               TEXT NOT NULL DEFAULT '#5865F2',
       panel_style         TEXT NOT NULL DEFAULT 'buttons',
+      image_url           TEXT,
       allow_multiple_open INTEGER NOT NULL DEFAULT 0,
       created_at          INTEGER NOT NULL DEFAULT (unixepoch())
     );
@@ -359,4 +360,12 @@ function createTables() {
       log_channel_change    INTEGER NOT NULL DEFAULT 0
     );
   `);
+
+  // ── Migrations (add columns to existing DBs safely) ──────────────────────
+  const migrations = [
+    `ALTER TABLE ticket_panels ADD COLUMN image_url TEXT`,
+  ];
+  for (const sql of migrations) {
+    try { db.exec(sql); } catch { /* column already exists — safe to ignore */ }
+  }
 }
