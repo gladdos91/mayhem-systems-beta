@@ -24,7 +24,7 @@ export function ticketsRouter(client: Client, db: DatabaseSync) {
   });
 
   router.post('/:guildId/panels', requireGuild, async (req, res) => {
-    const { channelId, title, description, color, panelStyle } = req.body;
+    const { channelId, title, description, color, panelStyle, imageUrl } = req.body;
     if (!channelId) return res.status(400).json({ error: 'channelId required' });
 
     const guild = client.guilds.cache.get(req.params.guildId);
@@ -32,16 +32,15 @@ export function ticketsRouter(client: Client, db: DatabaseSync) {
 
     const panelId = nanoid(8);
     db.prepare(`
-      INSERT INTO ticket_panels (id, guild_id, channel_id, title, description, color, panel_style)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO ticket_panels (id, guild_id, channel_id, title, description, color, panel_style, image_url)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `).run(panelId, req.params.guildId, channelId,
       title ?? '🎫 Support Tickets',
-      description ?? 'Select a ticket category below to open a support ticket.',
+      description ?? '',
       color ?? '#5865F2',
-      panelStyle ?? 'buttons');
+      panelStyle ?? 'buttons',
+      imageUrl ?? null);
 
-    // Deploy initial panel
-    await _ticketsModule?.rebuildPanelMessage(panelId, db, guild);
     res.json({ success: true, id: panelId });
   });
 
@@ -105,6 +104,7 @@ export function ticketsRouter(client: Client, db: DatabaseSync) {
         .setTimestamp();
 
       if (panel.description) embed.setDescription(panel.description);
+      if (panel.image_url)   embed.setImage(panel.image_url);
 
       const style = panel.panel_style ?? panel.style ?? 'buttons';
       const components: any[] = [];
