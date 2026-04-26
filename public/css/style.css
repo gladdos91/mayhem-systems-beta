@@ -217,8 +217,8 @@ select option { background: var(--bg-secondary); }
 
 /* ── MODAL ──────────────────────────────────────────────────── */
 .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.7); display: flex; align-items: center; justify-content: center; z-index: 1000; padding: 16px; }
-.modal { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 12px; width: 100%; max-width: 520px; max-height: 90vh; overflow-y: auto; box-shadow: var(--shadow); }
-.modal-header { display: flex; align-items: center; justify-content: space-between; padding: 20px 24px 0; margin-bottom: 16px; }
+.modal, .modal-card { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 12px; width: 100%; max-width: 520px; max-height: 90vh; overflow-y: auto; box-shadow: var(--shadow); }
+.modal-header, .modal-card .modal-header { display: flex; align-items: center; justify-content: space-between; padding: 20px 24px 16px; border-bottom: 1px solid var(--border); }
 .modal-header h3 { font-family: 'Rajdhani', sans-serif; font-size: 18px; font-weight: 700; color: var(--text-header); }
 .modal-close { background: none; border: none; color: var(--text-muted); font-size: 18px; padding: 4px 8px; border-radius: 4px; transition: color .1s; }
 .modal-close:hover { color: var(--text-primary); }
@@ -291,3 +291,17 @@ select option { background: var(--bg-secondary); }
 
 /* ── Ticket panel cards ─────────────────────────────────── */
 .panel-category-card { background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: 6px; padding: 12px 14px; margin-bottom: 8px; }
+
+/* ── Modal card form rows ──────────────────────────────── */
+.modal-card .form-row { padding: 10px 24px; border-bottom: 1px solid var(--border); gap: 12px; flex-wrap: wrap; }
+.modal-card .form-row:last-of-type { border-bottom: none; }
+.modal-card .form-row label { font-size: 13px; font-weight: 600; color: var(--text-primary); min-width: 130px; flex-shrink: 0; }
+.modal-card .modal-footer { padding: 16px 24px 20px; border-top: 1px solid var(--border); }
+.modal-card input[type=text],
+.modal-card input[type=number],
+.modal-card input[type=url],
+.modal-card select,
+.modal-card textarea { background: #1e1f22 !important; border: 1px solid var(--border) !important; color: var(--text-primary) !important; padding: 8px 11px; border-radius: 4px; flex: 1; min-width: 180px; }
+.modal-card select[multiple] { height: 110px; padding: 4px; }
+.modal-card select[multiple] option { padding: 4px 8px; border-radius: 3px; }
+.modal-card select[multiple] option:checked { background: var(--accent); color: #fff; }
