@@ -241,7 +241,8 @@ async function loadTicketPanels() {
           <div>
             <div style="font-size:16px;font-weight:700;color:var(--text-header)">${escHtml(panel.title)}</div>
             <div style="font-size:11px;color:var(--text-muted);margin-top:3px">
-              ID: <code>${panel.id}</code> · Style: ${panel.style} · <#${panel.channel_id ?? 'no channel'}>
+              ID: <code>${panel.id}</code> · Style: ${panel.style ?? panel.panel_style} · <#${panel.channel_id ?? 'no channel'}>
+              ${panel.image_url ? `· <a href="${escHtml(panel.image_url)}" target="_blank" style="color:var(--accent)">🖼️ Image</a>` : ''}
             </div>
           </div>
           <div style="display:flex;gap:7px;flex-shrink:0">
@@ -317,13 +318,14 @@ async function createPanel() {
   const description = $('cp-description').value.trim();
   const channelId = $('cp-channel').value;
   const panelStyle = $('cp-style').value;
+  const imageUrl = $('cp-image').value.trim() || null;
   if (!title) return toast('Title is required', 'error');
   if (!channelId) return toast('Select a channel', 'error');
   try {
-    await api(`/api/tickets/${S.guildId}/panels`, { method: 'POST', body: JSON.stringify({ title, description, channelId, panelStyle }) });
-    toast('Panel created!', 'success');
+    await api(`/api/tickets/${S.guildId}/panels`, { method: 'POST', body: JSON.stringify({ title, description, channelId, panelStyle, imageUrl }) });
+    toast('Panel created! Add categories then Deploy.', 'success');
     closeModal('modal-create-panel');
-    $('cp-title').value = ''; $('cp-description').value = ''; $('cp-channel').value = '';
+    $('cp-title').value = ''; $('cp-description').value = ''; $('cp-channel').value = ''; $('cp-image').value = '';
     loadTicketPanels();
   } catch (e) { toast(e.message, 'error'); }
 }
