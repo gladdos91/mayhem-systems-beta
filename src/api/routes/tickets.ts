@@ -80,15 +80,84 @@ export function ticketsRouter(client: Client, db: DatabaseSync) {
 
   // Deploy / refresh panel
   router.post('/:guildId/panels/:panelId/deploy', requireGuild, async (req, res) => {
-    const panel = db.prepare('SELECT id FROM ticket_panels WHERE id = ? AND guild_id = ?')
-      .get(req.params.panelId, req.params.guildId);
-    if (!panel) return res.status(404).json({ error: 'Panel not found' });
+    try {
+      const panel = db.prepare('SELECT * FROM ticket_panels WHERE id = ? AND guild_id = ?')
+        .get(req.params.panelId, req.params.guildId) as any;
+      if (!panel) return res.status(404).json({ error: 'Panel not found' });
 
-    const guild = client.guilds.cache.get(req.params.guildId);
-    if (!guild) return res.status(404).json({ error: 'Guild not found' });
+      const guild = client.guilds.cache.get(req.params.guildId);
+      if (!guild) return res.status(404).json({ error: 'Guild not found in cache' });
 
-    const ok = await _ticketsModule?.rebuildPanelMessage(req.params.panelId, db, guild);
-    res.json({ success: !!ok });
+      const categories = db.prepare(
+        'SELECT * FROM ticket_categories WHERE panel_id = ? ORDER BY sort_order ASC'
+      ).all(req.params.panelId) as any[];
+
+      const channel = guild.channels.cache.get(panel.channel_id) as any;
+      if (!channel) return res.status(404).json({ error: 'Channel not found — bot may not have access' });
+
+      const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle,
+              StringSelectMenuBuilder, StringSelectMenuOptionBuilder } = await import('discord.js');
+
+      const embed = new EmbedBuilder()
+        .setTitle(panel.title ?? '🎫 Support Tickets')
+        .setDescription(panel.description ?? 'Select a category below to open a ticket.')
+        .setColor(0x5865F2)
+        .setFooter({ text: `Panel ID: ${panel.id}` })
+        .setTimestamp();
+
+      const style = panel.panel_style ?? panel.style ?? 'buttons';
+      const components: any[] = [];
+
+      if (style === 'dropdown' && categories.length > 0) {
+        const menu = new StringSelectMenuBuilder()
+          .setCustomId(`ticket:dropdown:${panel.id}`)
+          .setPlaceholder('Select a ticket type...')
+          .addOptions(categories.map((c: any) =>
+            new StringSelectMenuOptionBuilder()
+              .setLabel(c.label)
+              .setValue(c.id)
+              .setDescription(c.description || 'Open a support ticket')
+              .setEmoji(c.emoji || '🎫')
+          ));
+        components.push(new ActionRowBuilder().addComponents(menu));
+      } else if (categories.length > 0) {
+        for (let i = 0; i < categories.length; i += 5) {
+          const row = new ActionRowBuilder();
+          for (const cat of categories.slice(i, i + 5)) {
+            const btn = new ButtonBuilder()
+              .setCustomId(`ticket:create:${cat.id}`)
+              .setLabel(cat.label)
+              .setStyle(ButtonStyle.Primary);
+            if (cat.emoji) btn.setEmoji(cat.emoji);
+            row.addComponents(btn);
+          }
+          components.push(row);
+        }
+      }
+
+      const msgPayload: any = { embeds: [embed] };
+      if (components.length > 0) msgPayload.components = components;
+
+      if (!panel.message_id) {
+        // First deploy — send new message
+        const msg = await channel.send(msgPayload);
+        db.prepare('UPDATE ticket_panels SET message_id = ? WHERE id = ?').run(msg.id, panel.id);
+      } else {
+        // Edit existing message, re-send if deleted
+        try {
+          const msg = await channel.messages.fetch(panel.message_id);
+          await msg.edit(msgPayload);
+        } catch {
+          const msg = await channel.send(msgPayload);
+          db.prepare('UPDATE ticket_panels SET message_id = ? WHERE id = ?').run(msg.id, panel.id);
+        }
+      }
+
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error('[Deploy] error:', err);
+      res.status(500).json({ error: err.message ?? 'Deploy failed' });
+    }
   });
 
   // ── Categories ────────────────────────────────────────────────────
