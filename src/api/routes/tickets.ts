@@ -100,10 +100,11 @@ export function ticketsRouter(client: Client, db: DatabaseSync) {
 
       const embed = new EmbedBuilder()
         .setTitle(panel.title ?? '🎫 Support Tickets')
-        .setDescription(panel.description ?? 'Select a category below to open a ticket.')
         .setColor(0x5865F2)
         .setFooter({ text: `Panel ID: ${panel.id}` })
         .setTimestamp();
+
+      if (panel.description) embed.setDescription(panel.description);
 
       const style = panel.panel_style ?? panel.style ?? 'buttons';
       const components: any[] = [];
