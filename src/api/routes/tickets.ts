@@ -317,10 +317,11 @@ export function ticketsRouter(client: Client, db: DatabaseSync) {
     res.json({ success: true });
   });
 
-  router.get('/:guildId/:ticketId/transcript', requireGuild, (req, res) => {
+  // Transcript — public endpoint, no auth required (ticket ID is the secret)
+  router.get('/:guildId/:ticketId/transcript', (req, res) => {
     const t = db.prepare('SELECT transcript FROM tickets WHERE id = ? AND guild_id = ?').get(req.params.ticketId, req.params.guildId) as any;
-    if (!t?.transcript) return res.status(404).json({ error: 'No transcript' });
-    res.setHeader('Content-Type', 'text/html');
+    if (!t?.transcript) return res.status(404).send('<h2>No transcript found for this ticket.</h2>');
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.send(t.transcript);
   });
 
