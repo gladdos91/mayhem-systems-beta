@@ -481,10 +481,10 @@ export class TicketsModule extends BaseModule {
       for (const q of questions) {
         const input = new TextInputBuilder()
           .setCustomId(`q_${q.id}`)
-          .setLabel(q.label)
+          .setLabel(q.label.slice(0, 45))
           .setStyle(q.style === 'paragraph' ? TextInputStyle.Paragraph : TextInputStyle.Short)
           .setRequired(!!q.required);
-        if (q.placeholder) input.setPlaceholder(q.placeholder);
+        if (q.placeholder) input.setPlaceholder(q.placeholder.slice(0, 100));
         modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(input));
       }
 
