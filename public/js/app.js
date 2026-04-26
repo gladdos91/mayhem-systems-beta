@@ -277,7 +277,7 @@ function renderCategory(panelId, cat) {
         </div>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:11px;margin-bottom:9px">
-        <div style="color:var(--text-muted)">👮 Admins: <span style="color:var(--text-normal)">${cat.admin_roles ? cat.admin_roles.split(',').map(r=>`<@&${r.trim()}>`).join(' ') : 'None'}</span></div>
+        <div style="color:var(--text-muted)">👮 Admins: <span style="color:var(--text-normal)">${Array.isArray(cat.admin_roles) && cat.admin_roles.length ? cat.admin_roles.map(r=>`<@&${r}>`).join(' ') : 'None'}</span></div>
         <div style="color:var(--text-muted)">⏱️ Autoclose: <span style="color:var(--text-normal)">${cat.autoclose_hours ? cat.autoclose_hours + 'h' : 'Off'}</span></div>
         <div style="color:var(--text-muted)">🔢 Limit: <span style="color:var(--text-normal)">${cat.per_user_limit ?? 1}/user</span></div>
         <div style="color:var(--text-muted)">📋 Questions: <span id="q-count-${cat.id}">Loading...</span></div>
