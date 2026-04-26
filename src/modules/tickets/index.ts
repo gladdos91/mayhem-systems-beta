@@ -897,14 +897,14 @@ export class TicketsModule extends BaseModule {
       files: [{ attachment: Buffer.from(html), name: `${channel.name}-transcript.html` }],
     });
 
-    // Also post to the ticket channel (non-ephemeral) so staff can see it
+    // Post clean notification to the ticket channel — no file attached so Discord doesn't preview raw HTML
     await channel.send({
       embeds: [new EmbedBuilder()
         .setColor(0x5865F2)
         .setTitle('📄 Transcript Generated')
-        .setDescription(`Transcript created by <@${interaction.user.id}>.`)
+        .setDescription(`Transcript created by <@${interaction.user.id}>. Check your DMs/ephemeral message to download it.`)
+        .addFields({ name: 'Messages captured', value: sorted.length.toString(), inline: true })
         .setTimestamp()],
-      files: [{ attachment: Buffer.from(html), name: `${channel.name}-transcript.html` }],
     });
   }
 
