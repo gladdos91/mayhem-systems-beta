@@ -212,7 +212,7 @@
       <div class="modal-card" style="max-width:460px">
         <div class="modal-header"><h3>Add Question</h3><button class="modal-close" onclick="closeModal('modal-add-question')">✕</button></div>
         <input type="hidden" id="aq-category-id"/>
-        <div class="form-row"><label>Question Label</label><input type="text" id="aq-label" placeholder="What is your issue?"/></div>
+        <div class="form-row"><label>Question Label<small style="display:block;font-size:10px;color:var(--text-muted)">Max 45 characters</small></label><input type="text" id="aq-label" placeholder="What is your issue?" maxlength="45"/></div>
         <div class="form-row"><label>Placeholder</label><input type="text" id="aq-placeholder" placeholder="Describe in detail..."/></div>
         <div class="form-row"><label>Style</label>
           <select id="aq-style">
@@ -551,6 +551,6 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 });
 </script>
-<script src="/js/app.js?v=9"></script>
+<script src="/js/app.js?v=10"></script>
 </body>
 </html>
