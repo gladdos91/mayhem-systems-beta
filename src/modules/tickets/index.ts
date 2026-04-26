@@ -354,21 +354,20 @@ export class TicketsModule extends BaseModule {
 
   async rebuildPanelMessage(panelId: string, db: DatabaseSync, guild: any) {
     const panel = db.prepare('SELECT * FROM ticket_panels WHERE id = ?').get(panelId) as any;
-    if (!panel?.message_id) return;
+    if (!panel) return false;
     const categories = db.prepare('SELECT * FROM ticket_categories WHERE panel_id = ? ORDER BY sort_order ASC').all(panelId) as any[];
     const channel    = guild.channels.cache.get(panel.channel_id) as TextChannel | undefined;
-    if (!channel) return;
+    if (!channel) return false;
 
     try {
-      const msg = await channel.messages.fetch(panel.message_id);
       const embed = new EmbedBuilder()
         .setTitle(panel.title)
-        .setDescription(panel.description)
-        .setColor(panel.color)
+        .setDescription(panel.description ?? 'Select a category below to open a ticket.')
+        .setColor(panel.color ?? 0x5865F2)
         .setFooter({ text: `Panel ID: ${panel.id}` })
         .setTimestamp();
 
-      const style = panel.style ?? 'buttons';
+      const style = panel.style ?? panel.panel_style ?? 'buttons';
       const components: any[] = [];
 
       if (style === 'dropdown' && categories.length > 0) {
@@ -379,6 +378,7 @@ export class TicketsModule extends BaseModule {
             new StringSelectMenuOptionBuilder()
               .setLabel(c.label)
               .setValue(c.id)
+              .setDescription(c.description || 'Open a support ticket')
               .setEmoji(c.emoji || '🎫')
           ));
         components.push(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu));
@@ -397,9 +397,24 @@ export class TicketsModule extends BaseModule {
         }
       }
 
-      await msg.edit({ embeds: [embed], components });
+      // If no message yet, send a new one; otherwise edit the existing one
+      if (!panel.message_id) {
+        const msg = await channel.send({ embeds: [embed], components });
+        db.prepare('UPDATE ticket_panels SET message_id = ? WHERE id = ?').run(msg.id, panelId);
+      } else {
+        try {
+          const msg = await channel.messages.fetch(panel.message_id);
+          await msg.edit({ embeds: [embed], components });
+        } catch {
+          // Message was deleted — send a fresh one
+          const msg = await channel.send({ embeds: [embed], components });
+          db.prepare('UPDATE ticket_panels SET message_id = ? WHERE id = ?').run(msg.id, panelId);
+        }
+      }
+      return true;
     } catch (err) {
-      console.error('[Tickets] rebuildPanel error:', err);
+      console.error('[Tickets] rebuildPanelMessage error:', err);
+      return false;
     }
   }
 
