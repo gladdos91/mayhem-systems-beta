@@ -157,6 +157,9 @@ function populateSelects() {
   // Ticket category admin roles (multi-select)
   const acRoles = $('ac-admin-roles');
   if (acRoles) acRoles.innerHTML = S.roles.filter(r => r.name !== '@everyone').map(r=>`<option value="${r.id}">@${escHtml(r.name)}</option>`).join('');
+  // Ticket category — Discord category channel where ticket channels open
+  const acCat = $('ac-category-id');
+  if (acCat) acCat.innerHTML = '<option value="">None (server root)</option>' + cats.map(c=>`<option value="${c.id}">📁 ${escHtml(c.name)}</option>`).join('');
   // Rules panel channel
   const rpCh  = $('rp-channel');  if (rpCh) rpCh.innerHTML = textOpts;
 }
@@ -280,7 +283,7 @@ function renderCategory(panelId, cat) {
         <div style="color:var(--text-muted)">👮 Admins: <span style="color:var(--text-normal)">${Array.isArray(cat.admin_roles) && cat.admin_roles.length ? cat.admin_roles.map(r=>`<@&${r}>`).join(' ') : 'None'}</span></div>
         <div style="color:var(--text-muted)">⏱️ Autoclose: <span style="color:var(--text-normal)">${cat.autoclose_hours ? cat.autoclose_hours + 'h' : 'Off'}</span></div>
         <div style="color:var(--text-muted)">🔢 Limit: <span style="color:var(--text-normal)">${cat.per_user_limit ?? 1}/user</span></div>
-        <div style="color:var(--text-muted)">📋 Questions: <span id="q-count-${cat.id}">Loading...</span></div>
+        <div style="color:var(--text-muted)">📁 Opens in: <span style="color:var(--text-normal)">${cat.category_id ? (S.channels.find(c=>c.id===cat.category_id)?.name ?? cat.category_id) : 'Server root'}</span></div>
       </div>
       <div style="border-top:1px solid var(--border);padding-top:8px">
         <div style="font-size:10px;font-weight:700;color:var(--text-muted);text-transform:uppercase;margin-bottom:6px">Modal Questions</div>
@@ -353,6 +356,7 @@ function openAddCategory(panelId) {
   $('ac-panel-id').value = panelId;
   $('ac-label').value = ''; $('ac-description').value = ''; $('ac-emoji').value = '🎫';
   $('ac-prefix').value = 'ticket-';
+  if ($('ac-category-id')) $('ac-category-id').value = '';
   // Clear multi-select selections
   const sel = $('ac-admin-roles');
   if (sel) Array.from(sel.options).forEach(o => o.selected = false);
@@ -370,6 +374,7 @@ async function addCategory() {
   const description = $('ac-description').value.trim();
   const emoji = $('ac-emoji').value.trim();
   const channelPrefix = $('ac-prefix').value.trim() || 'ticket-';
+  const categoryId = $('ac-category-id')?.value || null;
   // Collect selected role IDs from multi-select
   const rolesEl = $('ac-admin-roles');
   const adminRoles = rolesEl ? Array.from(rolesEl.selectedOptions).map(o => o.value) : [];
@@ -379,7 +384,7 @@ async function addCategory() {
   try {
     await api(`/api/tickets/${S.guildId}/panels/${panelId}/categories`, {
       method: 'POST',
-      body: JSON.stringify({ label, description, emoji, channelPrefix, adminRoles, autocloseHours, perUserLimit })
+      body: JSON.stringify({ label, description, emoji, channelPrefix, categoryId, adminRoles, autocloseHours, perUserLimit })
     });
     toast('Category added!', 'success');
     closeModal('modal-add-category');
