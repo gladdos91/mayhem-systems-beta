@@ -4,7 +4,7 @@
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
   <title>Mayhem System's V2 — Dashboard</title>
-  <link rel="stylesheet" href="/css/style.css?v=5"/>
+  <link rel="stylesheet" href="/css/style.css?v=8"/>
   <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@600;700&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet"/>
 </head>
 <body>
@@ -189,6 +189,10 @@
         <div class="form-row"><label>Description</label><input type="text" id="ac-description" placeholder="Open a support ticket"/></div>
         <div class="form-row"><label>Emoji</label><input type="text" id="ac-emoji" placeholder="🎫" style="width:80px"/></div>
         <div class="form-row"><label>Channel Prefix</label><input type="text" id="ac-prefix" placeholder="ticket-" style="width:140px"/></div>
+        <div class="form-row">
+          <label>Ticket Category<small style="display:block;font-size:10px;color:var(--text-muted)">Discord category where channels open</small></label>
+          <select id="ac-category-id" style="flex:1;min-width:180px"><option value="">None (server root)</option></select>
+        </div>
         <div class="form-row" style="align-items:flex-start">
           <label style="padding-top:4px">Admin Roles<small style="display:block;font-size:10px;color:var(--text-muted)">Ctrl/Cmd+click to multi-select</small></label>
           <select id="ac-admin-roles" multiple style="height:100px;min-width:200px"></select>
@@ -546,6 +550,6 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 });
 </script>
-<script src="/js/app.js?v=7"></script>
+<script src="/js/app.js?v=8"></script>
 </body>
 </html>
