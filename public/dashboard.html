@@ -4,7 +4,7 @@
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
   <title>Mayhem System's V2 — Dashboard</title>
-  <link rel="stylesheet" href="/css/style.css?v=8"/>
+  <link rel="stylesheet" href="/css/style.css?v=9"/>
   <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@600;700&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet"/>
 </head>
 <body>
@@ -166,6 +166,7 @@
         <div class="modal-header"><h3>New Ticket Panel</h3><button class="modal-close" onclick="closeModal('modal-create-panel')">✕</button></div>
         <div class="form-row"><label>Panel Title</label><input type="text" id="cp-title" placeholder="e.g. Server Support"/></div>
         <div class="form-row"><label>Description</label><input type="text" id="cp-description" placeholder="Click below to open a ticket"/></div>
+        <div class="form-row"><label>Header Image URL<small style="display:block;font-size:10px;color:var(--text-muted)">Optional — paste a direct image link</small></label><input type="url" id="cp-image" placeholder="https://..."/></div>
         <div class="form-row"><label>Channel</label><select id="cp-channel"><option value="">Select channel...</option></select></div>
         <div class="form-row"><label>Style</label>
           <select id="cp-style">
@@ -550,6 +551,6 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 });
 </script>
-<script src="/js/app.js?v=8"></script>
+<script src="/js/app.js?v=9"></script>
 </body>
 </html>
