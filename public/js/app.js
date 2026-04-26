@@ -152,6 +152,8 @@ function populateSelects() {
   const rrCh  = $('rr-channel');  if (rrCh) rrCh.innerHTML = textOpts;
   // RR item role
   const rrIr  = $('rr-item-role'); if (rrIr) rrIr.innerHTML = S.roles.map(r=>`<option value="${r.id}">@${escHtml(r.name)}</option>`).join('');
+  // Ticket panel channel
+  const cpCh  = $('cp-channel');  if (cpCh) cpCh.innerHTML = '<option value="">Select channel...</option>' + textOpts;
   // Rules panel channel
   const rpCh  = $('rp-channel');  if (rpCh) rpCh.innerHTML = textOpts;
 }
@@ -203,7 +205,224 @@ async function deleteAnnouncement(id) {
 }
 
 // ─── Tickets ──────────────────────────────────────────────────────
+// ── TICKET PANEL MANAGEMENT ──────────────────────────────────────────────────
+
 async function loadTickets() {
+  await loadTicketPanels();
+  // also load the ticket list in background
+  loadTicketList();
+}
+
+async function loadTicketPanels() {
+  const wrap = $('ticket-panels-list');
+  if (!wrap) return;
+  try {
+    const panels = await api(`/api/tickets/${S.guildId}/panels`);
+    if (!panels.length) {
+      wrap.innerHTML = '<div class="empty-state">No ticket panels yet. Click "+ New Panel" to create one.</div>';
+      return;
+    }
+    wrap.innerHTML = '';
+    for (const panel of panels) {
+      // Load categories for each panel
+      let cats = [];
+      try { cats = await api(`/api/tickets/${S.guildId}/panels/${panel.id}/categories`); } catch {}
+      const card = document.createElement('div');
+      card.className = 'card';
+      card.style.cssText = 'border-top:3px solid var(--accent);margin-bottom:14px';
+      card.innerHTML = `
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:14px">
+          <div>
+            <div style="font-size:16px;font-weight:700;color:var(--text-header)">${escHtml(panel.title)}</div>
+            <div style="font-size:11px;color:var(--text-muted);margin-top:3px">
+              ID: <code>${panel.id}</code> · Style: ${panel.style} · <#${panel.channel_id ?? 'no channel'}>
+            </div>
+          </div>
+          <div style="display:flex;gap:7px;flex-shrink:0">
+            <button class="btn btn-secondary btn-sm" onclick="deployPanel('${panel.id}')">🚀 Deploy to Discord</button>
+            <button class="btn btn-danger btn-sm" onclick="deletePanel('${panel.id}')">🗑️</button>
+          </div>
+        </div>
+        <div style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:9px">Categories (${cats.length})</div>
+        <div id="cats-${panel.id}" style="display:flex;flex-direction:column;gap:8px">
+          ${cats.map(c => renderCategory(panel.id, c)).join('')}
+          <div style="margin-top:4px">
+            <button class="btn btn-secondary btn-sm" onclick="openAddCategory('${panel.id}')">+ Add Category</button>
+          </div>
+        </div>`;
+      wrap.appendChild(card);
+      // Load questions for each category
+      for (const cat of cats) {
+        await loadCategoryQuestions(panel.id, cat.id);
+      }
+    }
+  } catch (e) {
+    if (wrap) wrap.innerHTML = `<div class="empty-state">Error: ${escHtml(e.message)}</div>`;
+  }
+}
+
+function renderCategory(panelId, cat) {
+  return `
+    <div class="card" style="background:var(--bg-tertiary);margin:0" id="cat-card-${cat.id}">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:8px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="background:var(--accent);border-radius:4px;padding:2px 10px;font-size:11px;font-weight:700;color:#fff">${cat.emoji ?? '🎫'} ${escHtml(cat.label)}</span>
+          <span style="font-size:10px;color:var(--text-muted)">prefix: <code>${escHtml(cat.channel_prefix ?? 'ticket-')}</code></span>
+        </div>
+        <div style="display:flex;gap:5px">
+          <button class="btn btn-danger btn-sm" onclick="deleteCategory('${panelId}','${cat.id}')">🗑️</button>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:11px;margin-bottom:9px">
+        <div style="color:var(--text-muted)">👮 Admins: <span style="color:var(--text-normal)">${cat.admin_roles ? cat.admin_roles.split(',').map(r=>`<@&${r.trim()}>`).join(' ') : 'None'}</span></div>
+        <div style="color:var(--text-muted)">⏱️ Autoclose: <span style="color:var(--text-normal)">${cat.autoclose_hours ? cat.autoclose_hours + 'h' : 'Off'}</span></div>
+        <div style="color:var(--text-muted)">🔢 Limit: <span style="color:var(--text-normal)">${cat.per_user_limit ?? 1}/user</span></div>
+        <div style="color:var(--text-muted)">📋 Questions: <span id="q-count-${cat.id}">Loading...</span></div>
+      </div>
+      <div style="border-top:1px solid var(--border);padding-top:8px">
+        <div style="font-size:10px;font-weight:700;color:var(--text-muted);text-transform:uppercase;margin-bottom:6px">Modal Questions</div>
+        <div id="questions-${cat.id}" style="display:flex;flex-direction:column;gap:4px;margin-bottom:7px"></div>
+        <button class="btn btn-secondary btn-sm" onclick="openAddQuestion('${cat.id}')">+ Add Question</button>
+      </div>
+    </div>`;
+}
+
+async function loadCategoryQuestions(panelId, catId) {
+  const wrap = $(`questions-${catId}`);
+  const countEl = $(`q-count-${catId}`);
+  if (!wrap) return;
+  try {
+    const qs = await api(`/api/tickets/${S.guildId}/categories/${catId}/questions`);
+    if (countEl) countEl.textContent = `${qs.length}/5`;
+    if (!qs.length) { wrap.innerHTML = '<span style="font-size:11px;color:var(--text-muted)">No questions yet</span>'; return; }
+    wrap.innerHTML = qs.map(q => `
+      <div style="display:flex;align-items:center;gap:8px;font-size:11px;background:var(--bg-primary);border-radius:4px;padding:5px 8px">
+        <span style="background:rgba(88,101,242,.15);border:1px solid rgba(88,101,242,.3);border-radius:3px;padding:1px 5px;color:#7289fa;font-size:9px">${q.style === 'paragraph' ? 'PARA' : 'SHORT'}</span>
+        <span style="flex:1;color:var(--text-normal)">${escHtml(q.label)}</span>
+        <span style="color:${q.required ? 'var(--danger)' : 'var(--text-muted)'};font-size:9px">${q.required ? 'required' : 'optional'}</span>
+        <button class="btn btn-danger btn-sm" style="padding:1px 5px;font-size:10px" onclick="deleteQuestion('${catId}','${q.id}')">✕</button>
+      </div>`).join('');
+  } catch {}
+}
+
+// Panel CRUD
+async function createPanel() {
+  const title = $('cp-title').value.trim();
+  const description = $('cp-description').value.trim();
+  const channelId = $('cp-channel').value;
+  const style = $('cp-style').value;
+  if (!title) return toast('Title is required', 'error');
+  if (!channelId) return toast('Select a channel', 'error');
+  try {
+    await api(`/api/tickets/${S.guildId}/panels`, { method: 'POST', body: JSON.stringify({ title, description, channelId, style }) });
+    toast('Panel created!', 'success');
+    closeModal('modal-create-panel');
+    $('cp-title').value = ''; $('cp-description').value = ''; $('cp-channel').value = '';
+    loadTicketPanels();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function deployPanel(panelId) {
+  if (!confirm('Deploy this panel to Discord? This will post/update the panel message in the configured channel.')) return;
+  try {
+    await api(`/api/tickets/${S.guildId}/panels/${panelId}/deploy`, { method: 'POST' });
+    toast('Panel deployed to Discord!', 'success');
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function deletePanel(panelId) {
+  if (!confirm('Delete this panel? The Discord message will also be removed.')) return;
+  try {
+    await api(`/api/tickets/${S.guildId}/panels/${panelId}`, { method: 'DELETE' });
+    toast('Panel deleted.', 'success');
+    loadTicketPanels();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+// Category CRUD
+function openAddCategory(panelId) {
+  $('ac-panel-id').value = panelId;
+  $('ac-label').value = ''; $('ac-description').value = ''; $('ac-emoji').value = '🎫';
+  $('ac-prefix').value = 'ticket-'; $('ac-admin-roles').value = '';
+  $('ac-autoclose').value = '0'; $('ac-limit').value = '1';
+  openModal('modal-add-category');
+}
+
+async function addCategory() {
+  const panelId = $('ac-panel-id').value;
+  const label = $('ac-label').value.trim();
+  const description = $('ac-description').value.trim();
+  const emoji = $('ac-emoji').value.trim();
+  const channelPrefix = $('ac-prefix').value.trim() || 'ticket-';
+  const adminRoles = $('ac-admin-roles').value.trim();
+  const autocloseHours = parseInt($('ac-autoclose').value) || 0;
+  const perUserLimit = parseInt($('ac-limit').value) || 1;
+  if (!label) return toast('Label is required', 'error');
+  try {
+    await api(`/api/tickets/${S.guildId}/panels/${panelId}/categories`, {
+      method: 'POST',
+      body: JSON.stringify({ label, description, emoji, channelPrefix, adminRoles, autocloseHours, perUserLimit })
+    });
+    toast('Category added!', 'success');
+    closeModal('modal-add-category');
+    loadTicketPanels();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function deleteCategory(panelId, catId) {
+  if (!confirm('Delete this category?')) return;
+  try {
+    await api(`/api/tickets/${S.guildId}/panels/${panelId}/categories/${catId}`, { method: 'DELETE' });
+    toast('Category deleted.', 'success');
+    loadTicketPanels();
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+// Questions CRUD
+function openAddQuestion(catId) {
+  $('aq-category-id').value = catId;
+  $('aq-label').value = ''; $('aq-placeholder').value = '';
+  $('aq-style').value = 'short'; $('aq-required').checked = true;
+  openModal('modal-add-question');
+}
+
+async function addQuestion() {
+  const catId = $('aq-category-id').value;
+  const label = $('aq-label').value.trim();
+  const placeholder = $('aq-placeholder').value.trim();
+  const style = $('aq-style').value;
+  const required = $('aq-required').checked;
+  if (!label) return toast('Question label is required', 'error');
+  try {
+    await api(`/api/tickets/${S.guildId}/categories/${catId}/questions`, {
+      method: 'POST',
+      body: JSON.stringify({ label, placeholder, style, required })
+    });
+    toast('Question added!', 'success');
+    closeModal('modal-add-question');
+    loadCategoryQuestions(null, catId);
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+async function deleteQuestion(catId, qId) {
+  try {
+    await api(`/api/tickets/${S.guildId}/categories/${catId}/questions/${qId}`, { method: 'DELETE' });
+    toast('Question removed.', 'success');
+    loadCategoryQuestions(null, catId);
+  } catch (e) { toast(e.message, 'error'); }
+}
+
+// Populate channel select when creating panel
+function openCreatePanelModal() {
+  // populate channel dropdown
+  const sel = $('cp-channel');
+  if (sel && sel.options.length <= 1) {
+    // channels should already be in state from populateSelects
+  }
+  openModal('modal-create-panel');
+}
+
+async function loadTicketList() {
   try {
     const stats = await api(`/api/tickets/${S.guildId}/stats/summary`);
     $('ts-open').textContent   = stats.open;
