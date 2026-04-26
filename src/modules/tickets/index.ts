@@ -494,6 +494,14 @@ export class TicketsModule extends BaseModule {
     // ── No questions — create immediately ───────────────────────────────────
     await interaction.deferReply({ ephemeral: true });
     await this.createTicketChannel(interaction, cat, cfg, {});
+
+    // Reset the panel message so the dropdown shows the placeholder again
+    // (otherwise Discord keeps the selected option checked for the user)
+    try {
+      if (interaction.message) {
+        await interaction.message.edit({ components: interaction.message.components });
+      }
+    } catch { /* panel message may have been deleted — ignore */ }
   }
 
   // ─── Handle Questions Modal Submit ───────────────────────────────────────────
@@ -879,45 +887,34 @@ export class TicketsModule extends BaseModule {
     const html = this.buildTranscriptHTML(channel.name, sorted, ticket);
     if (ticket) db.prepare('UPDATE tickets SET transcript = ? WHERE channel_id = ?').run(html, channel.id);
 
-    const fileAttachment = { attachment: Buffer.from(html), name: `${channel.name}-transcript.html` };
+    // Build dashboard link — opens the rendered HTML in a browser, no file preview issues
+    const { config } = await import('../../config');
+    const transcriptUrl = ticket
+      ? `${config.panelUrl}/api/tickets/${ticket.guild_id}/${ticket.id}/transcript`
+      : null;
 
-    // Try to DM the file to the user — Discord won't show code preview in DMs
-    let dmSent = false;
-    try {
-      const dm = await interaction.user.createDM();
-      await dm.send({
-        embeds: [new EmbedBuilder()
-          .setColor(0x5865F2)
-          .setTitle('📄 Transcript — #' + channel.name)
-          .setDescription('Open the attached file in your browser to view the full conversation.')
-          .addFields(
-            { name: 'Ticket #',  value: ticket?.ticket_number?.toString() ?? '—', inline: true },
-            { name: 'Messages',  value: sorted.length.toString(),                  inline: true },
-          )
-          .setTimestamp()],
-        files: [fileAttachment],
-      });
-      dmSent = true;
-    } catch { /* DMs disabled */ }
-
-    // Ephemeral reply to the requester
+    // Ephemeral reply with clickable link (only the requester sees this)
     await interaction.editReply({
       embeds: [new EmbedBuilder()
-        .setColor(dmSent ? 0x3BA55C : 0xFAA61A)
-        .setTitle(dmSent ? '✅ Transcript sent to your DMs!' : '📄 Transcript ready')
-        .setDescription(dmSent
-          ? 'Check your direct messages — the HTML file is there.\nOpen it in a browser to view the full transcript.'
-          : "Your DMs appear to be disabled. The file is attached below.")
+        .setColor(0x5865F2)
+        .setTitle('📄 Transcript Ready')
+        .setDescription(transcriptUrl
+          ? `[**Click here to view the transcript**](${transcriptUrl})\n\nOpens in your browser as a properly formatted page.`
+          : 'Transcript generated and saved.')
+        .addFields(
+          { name: 'Ticket #',  value: ticket?.ticket_number?.toString() ?? '—', inline: true },
+          { name: 'Messages',  value: sorted.length.toString(),                  inline: true },
+        )
         .setTimestamp()],
-      files: dmSent ? [] : [fileAttachment],
     });
 
-    // Clean embed in the ticket channel — no file attached
+    // Clean embed in the ticket channel — no file, no code preview
     await channel.send({
       embeds: [new EmbedBuilder()
         .setColor(0x5865F2)
         .setTitle('📄 Transcript Generated')
-        .setDescription(`Transcript created by <@${interaction.user.id}> · ${sorted.length} messages captured.`)
+        .setDescription(`Transcript created by <@${interaction.user.id}> · ${sorted.length} messages captured.`
+          + (transcriptUrl ? `\n[View Transcript](${transcriptUrl})` : ''))
         .setTimestamp()],
     });
   }
