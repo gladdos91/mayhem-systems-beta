@@ -634,9 +634,23 @@ export class TicketsModule extends BaseModule {
     db.prepare("UPDATE tickets SET status = 'closed', closed_at = unixepoch() WHERE id = ?").run(ticket.id);
 
     const channel = interaction.channel as TextChannel;
+
+    // Auto-generate and save transcript on close
+    try {
+      const messages = await channel.messages.fetch({ limit: 100 });
+      const sorted   = [...messages.values()].reverse();
+      const html     = this.buildTranscriptHTML(channel.name, sorted, ticket);
+      db.prepare('UPDATE tickets SET transcript = ? WHERE id = ?').run(html, ticket.id);
+    } catch (e) {
+      console.error('[Tickets] Auto-transcript error on close:', e);
+    }
+
     try {
       await channel.permissionOverwrites.edit(ticket.creator_id, { SendMessages: false });
     } catch {}
+
+    const { config } = await import('../../config');
+    const transcriptUrl = `${config.panelUrl}/api/tickets/${ticket.guild_id}/${ticket.id}/transcript`;
 
     const closeRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
       new ButtonBuilder().setCustomId('ticket:reopen:').setLabel('Reopen').setStyle(ButtonStyle.Success).setEmoji('🔓'),
@@ -649,8 +663,9 @@ export class TicketsModule extends BaseModule {
         .setColor(0xED4245)
         .setTitle('🔒 Ticket Closed')
         .addFields(
-          { name: 'Closed by', value: `${interaction.user}`, inline: true },
-          { name: 'Reason',    value: reason,                inline: true },
+          { name: 'Closed by',  value: `${interaction.user}`, inline: true },
+          { name: 'Reason',     value: reason,                inline: true },
+          { name: 'Transcript', value: `[View Transcript](${transcriptUrl})`, inline: false },
         )
         .setTimestamp()],
       components: [closeRow],
@@ -1027,11 +1042,23 @@ ${statsRow}
       if (!guild) continue;
       const channel = guild.channels.cache.get(ticket.channel_id) as TextChannel | undefined;
       if (channel) {
+        // Auto-generate transcript before closing
+        try {
+          const messages = await channel.messages.fetch({ limit: 100 });
+          const sorted   = [...messages.values()].reverse();
+          const html     = this.buildTranscriptHTML(channel.name, sorted, ticket);
+          db.prepare('UPDATE tickets SET transcript = ? WHERE id = ?').run(html, ticket.id);
+        } catch {}
+
+        const { config } = await import('../../config');
+        const transcriptUrl = `${config.panelUrl}/api/tickets/${ticket.guild_id}/${ticket.id}/transcript`;
+
         await channel.send({
           embeds: [new EmbedBuilder()
             .setColor(0xFEE75C)
             .setTitle('⏱️ Ticket Auto-Closed')
-            .setDescription(`This ticket was automatically closed due to **${cfg.autoclose_hours} hours** of inactivity.`)],
+            .setDescription(`This ticket was automatically closed due to **${cfg.autoclose_hours} hours** of inactivity.`)
+            .addFields({ name: 'Transcript', value: `[View Transcript](${transcriptUrl})` })],
         }).catch(() => {});
       }
     }
