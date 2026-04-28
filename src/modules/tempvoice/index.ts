@@ -386,7 +386,6 @@ export class TempVoiceModule extends BaseModule {
     }
   }
 
-  // ─── Helpers ──────────────────────────────────────────────────────
   private getOwnedChannel(db: DatabaseSync, userId: string) {
     return db.prepare(
       'SELECT channel_id FROM temp_voice_channels WHERE owner_id = ?'
