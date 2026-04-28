@@ -5,6 +5,7 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
+    "prestart": "tsc",
     "start": "node --experimental-sqlite dist/index.js",
     "dev": "node --experimental-sqlite node_modules/ts-node/bin/ts-node src/index.ts",
     "watch": "node --experimental-sqlite node_modules/ts-node-dev/bin/ts-node-dev --respawn src/index.ts"
