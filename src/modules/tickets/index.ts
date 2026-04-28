@@ -1,1066 +1,575 @@
-/**
- * Tickets Module — Mayhem Systems Discord Control
- * Full feature parity with OpenTicket (open-ticket-main)
- *
- * Features:
- *  - Button AND dropdown panels
- *  - Ticket questions (modal on creation — from questions.json)
- *  - Staff role enforcement (any role in any category admin_roles = staff)
- *  - Readonly admins (view only)
- *  - Blacklist (add/remove/view)
- *  - Priority (none/low/medium/high)
- *  - Autoclose (inactive hours + user leave)
- *  - Autodelete (inactive days + user leave)
- *  - Cooldowns per category
- *  - Per-category ticket limits (global + per user)
- *  - Slow mode on ticket channels
- *  - Move ticket to different category
- *  - Transfer ticket creator
- *  - Stats (/ticket stats global/user)
- *  - HTML transcripts (sent to channel + DM)
- *  - Pin/Unpin ticket message
- *  - Topic change
- */
-
 import {
-  Client, SlashCommandBuilder, EmbedBuilder, PermissionFlagsBits,
-  ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType,
-  ModalBuilder, TextInputBuilder, TextInputStyle,
-  StringSelectMenuBuilder, StringSelectMenuOptionBuilder,
-  Interaction, TextChannel, GuildMember, CategoryChannel, ButtonInteraction,
+  Client, VoiceState, SlashCommandBuilder,
+  PermissionFlagsBits, ChannelType, EmbedBuilder,
+  CategoryChannel, Interaction, ButtonBuilder, ButtonStyle,
+  ActionRowBuilder, GuildMember, ModalBuilder, TextInputBuilder, TextInputStyle,
 } from 'discord.js';
 import { DatabaseSync } from 'node:sqlite';
 import { BaseModule } from '../base';
 import { MayhemCommand } from '../../bot';
-import { nanoid } from '../../utils/nanoid';
-import cron from 'node-cron';
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+// Cooldown tracking (in-memory)
+const cooldowns = new Map<string, number>();
+const COOLDOWN_MS = 15_000;
 
-const PRIORITY_COLORS: Record<string, number> = {
-  none:   0x5865F2,
-  low:    0x57F287,
-  medium: 0xFEE75C,
-  high:   0xED4245,
-};
-const PRIORITY_LABELS: Record<string, string> = {
-  none: '⬜ None', low: '🟢 Low', medium: '🟡 Medium', high: '🔴 High',
-};
-const BTN_COLOR: Record<string, ButtonStyle> = {
-  Primary: ButtonStyle.Primary, Secondary: ButtonStyle.Secondary,
-  Success: ButtonStyle.Success, Danger: ButtonStyle.Danger,
-  blue: ButtonStyle.Primary, gray: ButtonStyle.Secondary,
-  green: ButtonStyle.Success, red: ButtonStyle.Danger,
-};
-
-/** Returns true if member is staff for this guild (has any ticket admin role) */
-function isStaff(member: GuildMember, db: DatabaseSync): boolean {
-  if (!member.guild) return false;
-  if (member.permissions.has(PermissionFlagsBits.Administrator)) return true;
-
-  const categories = db.prepare(
-    'SELECT admin_roles, readonly_roles FROM ticket_categories WHERE guild_id = ?'
-  ).all(member.guild.id) as any[];
-
-  for (const cat of categories) {
-    const adminRoles:    string[] = JSON.parse(cat.admin_roles    ?? '[]');
-    const readonlyRoles: string[] = JSON.parse(cat.readonly_roles ?? '[]');
-    const allStaffRoles = [...adminRoles, ...readonlyRoles];
-    if (allStaffRoles.some(r => member.roles.cache.has(r))) return true;
-  }
-  return false;
-}
-
-/** Returns true if member is an admin (full manage) for a specific category */
-function isCategoryAdmin(member: GuildMember, category: any): boolean {
-  if (member.permissions.has(PermissionFlagsBits.Administrator)) return true;
-  const adminRoles: string[] = JSON.parse(category.admin_roles ?? '[]');
-  return adminRoles.some(r => member.roles.cache.has(r));
-}
-
-/** Check cooldown — returns seconds remaining or 0 */
-function checkCooldown(db: DatabaseSync, userId: string, categoryId: string, cooldownMinutes: number): number {
-  const key = `cooldown:${userId}:${categoryId}`;
-  const row = db.prepare('SELECT value FROM kv_store WHERE key = ?').get(key) as any;
-  if (!row) return 0;
-  const elapsed = Date.now() / 1000 - parseInt(row.value);
-  const remaining = cooldownMinutes * 60 - elapsed;
-  return remaining > 0 ? Math.ceil(remaining) : 0;
-}
-
-function setCooldown(db: DatabaseSync, userId: string, categoryId: string) {
-  const key = `cooldown:${userId}:${categoryId}`;
-  db.prepare('INSERT OR REPLACE INTO kv_store (key, value) VALUES (?, ?)').run(key, Math.floor(Date.now() / 1000).toString());
-}
-
-// ─── Module ───────────────────────────────────────────────────────────────────
-
-export class TicketsModule extends BaseModule {
-  private autocloseTask?: cron.ScheduledTask;
-
+export class TempVoiceModule extends BaseModule {
   commands: MayhemCommand[] = [
     {
       data: new SlashCommandBuilder()
-        .setName('ticket')
-        .setDescription('Ticket system')
-        .addSubcommand(s => s.setName('panel').setDescription('Create a ticket panel')
-          .addChannelOption(o => o.setName('channel').setDescription('Channel').setRequired(true).addChannelTypes(ChannelType.GuildText))
-          .addStringOption(o => o.setName('title').setDescription('Title').setRequired(false))
-          .addStringOption(o => o.setName('description').setDescription('Description').setRequired(false))
-          .addStringOption(o => o.setName('color').setDescription('Hex color').setRequired(false))
-          .addStringOption(o => o.setName('style').setDescription('buttons or dropdown').setRequired(false)
-            .addChoices({ name: '🔘 Buttons', value: 'buttons' }, { name: '📋 Dropdown', value: 'dropdown' })))
-        .addSubcommand(s => s.setName('category').setDescription('Add a category to a panel')
-          .addStringOption(o => o.setName('panel_id').setDescription('Panel ID').setRequired(true))
-          .addStringOption(o => o.setName('label').setDescription('Button label').setRequired(true))
-          .addStringOption(o => o.setName('emoji').setDescription('Button emoji').setRequired(false))
-          .addStringOption(o => o.setName('color').setDescription('Primary Secondary Success Danger').setRequired(false))
-          .addRoleOption(o => o.setName('admin_role').setDescription('Admin role for tickets').setRequired(false))
-          .addRoleOption(o => o.setName('readonly_role').setDescription('Read-only role for tickets').setRequired(false))
-          .addChannelOption(o => o.setName('category_channel').setDescription('Discord category').setRequired(false).addChannelTypes(ChannelType.GuildCategory))
-          .addStringOption(o => o.setName('prefix').setDescription('Channel prefix').setRequired(false)))
-        .addSubcommand(s => s.setName('question').setDescription('Add a question to a category')
-          .addStringOption(o => o.setName('category_id').setDescription('Category ID').setRequired(true))
-          .addStringOption(o => o.setName('label').setDescription('Question label').setRequired(true))
-          .addStringOption(o => o.setName('type').setDescription('short or paragraph').setRequired(false)
-            .addChoices({ name: 'Short Answer', value: 'short' }, { name: 'Paragraph', value: 'paragraph' }))
-          .addBooleanOption(o => o.setName('required').setDescription('Required?').setRequired(false))
-          .addStringOption(o => o.setName('placeholder').setDescription('Placeholder text').setRequired(false)))
-        .addSubcommand(s => s.setName('config').setDescription('Configure category autoclose/limits/cooldown')
-          .addStringOption(o => o.setName('category_id').setDescription('Category ID').setRequired(true))
-          .addBooleanOption(o => o.setName('autoclose').setDescription('Enable autoclose').setRequired(false))
-          .addIntegerOption(o => o.setName('autoclose_hours').setDescription('Hours until autoclose').setRequired(false))
-          .addBooleanOption(o => o.setName('cooldown').setDescription('Enable cooldown').setRequired(false))
-          .addIntegerOption(o => o.setName('cooldown_minutes').setDescription('Cooldown minutes').setRequired(false))
-          .addIntegerOption(o => o.setName('user_max').setDescription('Max open tickets per user (0=unlimited)').setRequired(false)))
-        .addSubcommand(s => s.setName('close').setDescription('Close ticket')
-          .addStringOption(o => o.setName('reason').setDescription('Reason').setRequired(false)))
-        .addSubcommand(s => s.setName('reopen').setDescription('Reopen a closed ticket'))
-        .addSubcommand(s => s.setName('delete').setDescription('Delete this ticket permanently'))
-        .addSubcommand(s => s.setName('claim').setDescription('Claim this ticket'))
-        .addSubcommand(s => s.setName('unclaim').setDescription('Unclaim this ticket'))
-        .addSubcommand(s => s.setName('add').setDescription('Add user to ticket')
-          .addUserOption(o => o.setName('user').setDescription('User').setRequired(true)))
-        .addSubcommand(s => s.setName('remove').setDescription('Remove user from ticket')
-          .addUserOption(o => o.setName('user').setDescription('User').setRequired(true)))
-        .addSubcommand(s => s.setName('rename').setDescription('Rename ticket channel')
-          .addStringOption(o => o.setName('name').setDescription('New name').setRequired(true)))
-        .addSubcommand(s => s.setName('move').setDescription('Move ticket to another category')
-          .addStringOption(o => o.setName('category_id').setDescription('Target category ID').setRequired(true))
-          .addStringOption(o => o.setName('reason').setDescription('Reason').setRequired(false)))
-        .addSubcommand(s => s.setName('transfer').setDescription('Transfer ticket ownership')
-          .addUserOption(o => o.setName('user').setDescription('New owner').setRequired(true))
-          .addStringOption(o => o.setName('reason').setDescription('Reason').setRequired(false)))
-        .addSubcommand(s => s.setName('priority').setDescription('Set ticket priority')
-          .addStringOption(o => o.setName('level').setDescription('Priority level').setRequired(true)
-            .addChoices(
-              { name: '⬜ None',   value: 'none'   },
-              { name: '🟢 Low',   value: 'low'    },
-              { name: '🟡 Medium', value: 'medium' },
-              { name: '🔴 High',  value: 'high'   },
-            )))
-        .addSubcommand(s => s.setName('topic').setDescription('Change ticket channel topic')
-          .addStringOption(o => o.setName('topic').setDescription('New topic').setRequired(true)))
-        .addSubcommand(s => s.setName('transcript').setDescription('Generate a transcript'))
-        .addSubcommand(s => s.setName('stats').setDescription('View ticket stats')
-          .addUserOption(o => o.setName('user').setDescription('User stats (leave blank for global)').setRequired(false)))
-        .addSubcommand(s => s.setName('blacklist').setDescription('Manage the ticket blacklist')
-          .addStringOption(o => o.setName('action').setDescription('add, remove, or view').setRequired(true)
-            .addChoices({ name: 'Add', value: 'add' }, { name: 'Remove', value: 'remove' }, { name: 'View', value: 'view' }))
-          .addUserOption(o => o.setName('user').setDescription('User to add/remove').setRequired(false))
-          .addStringOption(o => o.setName('reason').setDescription('Reason for blacklist').setRequired(false)))
-        .addSubcommand(s => s.setName('deploy').setDescription('Refresh a panel embed')
-          .addStringOption(o => o.setName('panel_id').setDescription('Panel ID').setRequired(true)))
-        .setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels) as any,
+        .setName('voice')
+        .setDescription('Manage your temporary voice channel')
+        .addSubcommand(sub => sub
+          .setName('setup')
+          .setDescription('Set up the Join-to-Create system (Admin only)')
+          .addChannelOption(opt => opt
+            .setName('hub')
+            .setDescription('The hub channel users join to create a VC')
+            .setRequired(true)
+            .addChannelTypes(ChannelType.GuildVoice))
+          .addChannelOption(opt => opt
+            .setName('category')
+            .setDescription('Category where temporary channels are created')
+            .setRequired(true)
+            .addChannelTypes(ChannelType.GuildCategory))
+          .addIntegerOption(opt => opt
+            .setName('limit')
+            .setDescription('Default user limit (0 = unlimited)')
+            .setMinValue(0).setMaxValue(99)))
+        .addSubcommand(sub => sub
+          .setName('lock')
+          .setDescription('Lock your voice channel'))
+        .addSubcommand(sub => sub
+          .setName('unlock')
+          .setDescription('Unlock your voice channel'))
+        .addSubcommand(sub => sub
+          .setName('limit')
+          .setDescription('Set the user limit of your channel')
+          .addIntegerOption(opt => opt
+            .setName('amount')
+            .setDescription('0 = unlimited, 1–99 = limit')
+            .setRequired(true).setMinValue(0).setMaxValue(99)))
+        .addSubcommand(sub => sub
+          .setName('name')
+          .setDescription('Rename your channel')
+          .addStringOption(opt => opt
+            .setName('name')
+            .setDescription('New channel name')
+            .setRequired(true).setMaxLength(100)))
+        .addSubcommand(sub => sub
+          .setName('permit')
+          .setDescription('Allow a user into your locked channel')
+          .addUserOption(opt => opt
+            .setName('user').setDescription('User to permit').setRequired(true)))
+        .addSubcommand(sub => sub
+          .setName('reject')
+          .setDescription('Remove and block a user from your channel')
+          .addUserOption(opt => opt
+            .setName('user').setDescription('User to reject').setRequired(true)))
+        .addSubcommand(sub => sub
+          .setName('claim')
+          .setDescription('Claim ownership of the channel (if owner left)'))
+        .addSubcommand(sub => sub
+          .setName('info')
+          .setDescription('View info about your current voice channel')) as any,
 
       execute: async (interaction: any, db: DatabaseSync) => {
         const sub = interaction.options.getSubcommand();
         switch (sub) {
-          case 'panel':      return this.cmdPanel(interaction, db);
-          case 'category':   return this.cmdCategory(interaction, db);
-          case 'question':   return this.cmdQuestion(interaction, db);
-          case 'config':     return this.cmdConfig(interaction, db);
-          case 'close':      return this.cmdClose(interaction, db);
-          case 'reopen':     return this.cmdReopen(interaction, db);
-          case 'delete':     return this.cmdDelete(interaction, db);
-          case 'claim':      return this.cmdClaim(interaction, db);
-          case 'unclaim':    return this.cmdUnclaim(interaction, db);
-          case 'add':        return this.cmdAdd(interaction, db);
-          case 'remove':     return this.cmdRemove(interaction, db);
-          case 'rename':     return this.cmdRename(interaction, db);
-          case 'move':       return this.cmdMove(interaction, db);
-          case 'transfer':   return this.cmdTransfer(interaction, db);
-          case 'priority':   return this.cmdPriority(interaction, db);
-          case 'topic':      return this.cmdTopic(interaction, db);
-          case 'transcript': return this.cmdTranscript(interaction, db);
-          case 'stats':      return this.cmdStats(interaction, db);
-          case 'blacklist':  return this.cmdBlacklist(interaction, db);
-          case 'deploy':     return this.cmdDeploy(interaction, db);
+          case 'setup':  return this.cmdSetup(interaction, db);
+          case 'lock':   return this.cmdLock(interaction, db);
+          case 'unlock': return this.cmdUnlock(interaction, db);
+          case 'limit':  return this.cmdLimit(interaction, db);
+          case 'name':   return this.cmdName(interaction, db);
+          case 'permit': return this.cmdPermit(interaction, db);
+          case 'reject': return this.cmdReject(interaction, db);
+          case 'claim':  return this.cmdClaim(interaction, db);
+          case 'info':   return this.cmdInfo(interaction, db);
         }
       },
     },
   ];
 
-  // ─── onReady: start autoclose cron ──────────────────────────────────────────
-  async onReady() {
-    // Ensure kv_store table exists for cooldowns
-    this.db.prepare(`
-      CREATE TABLE IF NOT EXISTS kv_store (
-        key   TEXT PRIMARY KEY,
-        value TEXT NOT NULL
-      )
-    `).run();
-
-    // Run autoclose check every 10 minutes
-    this.autocloseTask = cron.schedule('*/10 * * * *', () => this.runAutoclose());
-    console.log('✅ Ticket autoclose scheduler started');
-  }
-
-  // ─── Interactions ────────────────────────────────────────────────────────────
-  async onInteraction(interaction: Interaction) {
-    if (interaction.isButton()) {
-      const [ns, action] = interaction.customId.split(':');
-      if (ns !== 'ticket') return;
-      if (action === 'create')    await this.handleCreateBtn(interaction as any);
-      if (action === 'close')     await this.handleQuickClose(interaction as any);
-      if (action === 'claim')     await this.cmdClaim(interaction as any, this.db);
-      if (action === 'reopen')    await this.cmdReopen(interaction as any, this.db);
-      if (action === 'transcript') await this.cmdTranscript(interaction as any, this.db);
-      if (action === 'delete')    await this.cmdDelete(interaction as any, this.db);
-    }
-    if (interaction.isStringSelectMenu() && interaction.customId.startsWith('ticket:dropdown:')) {
-      await this.handleDropdownCreate(interaction as any);
-    }
-    if (interaction.isModalSubmit() && interaction.customId.startsWith('ticket:questions:')) {
-      await this.handleQuestionsModal(interaction as any);
-    }
-  }
-
-  // ─── Panel Command ───────────────────────────────────────────────────────────
-  private async cmdPanel(interaction: any, db: DatabaseSync) {
-    await interaction.deferReply({ ephemeral: true });
-    const channel     = interaction.options.getChannel('channel') as TextChannel;
-    const title       = interaction.options.getString('title')       ?? '🎫 Support Tickets';
-    const description = interaction.options.getString('description') ?? 'Click a button below to open a ticket.';
-    const color       = interaction.options.getString('color')       ?? '#5865F2';
-    const style       = interaction.options.getString('style')       ?? 'buttons';
-
-    const panelId = nanoid(8);
-    db.prepare(`
-      INSERT INTO ticket_panels (id, guild_id, channel_id, title, description, color, style)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(panelId, interaction.guildId, channel.id, title, description, color, style);
-
-    const embed = new EmbedBuilder()
-      .setTitle(title)
-      .setDescription(`${description}\n\n> Use \`/ticket category\` with Panel ID: \`${panelId}\``)
-      .setColor(color as any)
-      .setFooter({ text: `Panel ID: ${panelId}` })
-      .setTimestamp();
-
-    const msg = await channel.send({ embeds: [embed] });
-    db.prepare('UPDATE ticket_panels SET message_id = ? WHERE id = ?').run(msg.id, panelId);
-    await interaction.editReply({ content: `✅ Panel created in ${channel}!\nPanel ID: \`${panelId}\`` });
-  }
-
-  // ─── Category Command ────────────────────────────────────────────────────────
-  private async cmdCategory(interaction: any, db: DatabaseSync) {
-    await interaction.deferReply({ ephemeral: true });
-    const panelId    = interaction.options.getString('panel_id', true);
-    const label      = interaction.options.getString('label', true);
-    const emoji      = interaction.options.getString('emoji')          ?? '';
-    const color      = interaction.options.getString('color')          ?? 'Primary';
-    const adminRole  = interaction.options.getRole('admin_role');
-    const roRole     = interaction.options.getRole('readonly_role');
-    const catCh      = interaction.options.getChannel('category_channel');
-    const prefix     = interaction.options.getString('prefix')         ?? 'ticket-';
-
-    const panel = db.prepare('SELECT * FROM ticket_panels WHERE id = ? AND guild_id = ?').get(panelId, interaction.guildId) as any;
-    if (!panel) return interaction.editReply({ content: '❌ Panel not found.' });
-
-    const catId = nanoid(8);
-    db.prepare(`
-      INSERT INTO ticket_categories
-        (id, panel_id, guild_id, label, emoji, color, admin_roles, readonly_roles, category_id, channel_prefix)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      catId, panelId, interaction.guildId, label, emoji, color,
-      JSON.stringify(adminRole ? [adminRole.id] : []),
-      JSON.stringify(roRole    ? [roRole.id]    : []),
-      catCh?.id ?? '', prefix,
-    );
-
-    // Init config row
-    db.prepare('INSERT OR IGNORE INTO ticket_category_config (category_id, guild_id) VALUES (?, ?)').run(catId, interaction.guildId);
-
-    await this.rebuildPanelMessage(panelId, db, interaction.guild);
-    await interaction.editReply({ content: `✅ Category **${label}** added!\nCategory ID: \`${catId}\`` });
-  }
-
-  // ─── Question Command ────────────────────────────────────────────────────────
-  private async cmdQuestion(interaction: any, db: DatabaseSync) {
-    const categoryId = interaction.options.getString('category_id', true);
-    const label      = interaction.options.getString('label', true);
-    const type       = interaction.options.getString('type')        ?? 'short';
-    const required   = interaction.options.getBoolean('required')   ?? true;
-    const placeholder = interaction.options.getString('placeholder') ?? null;
-
-    const cat = db.prepare('SELECT id FROM ticket_categories WHERE id = ? AND guild_id = ?').get(categoryId, interaction.guildId);
-    if (!cat) return interaction.reply({ content: '❌ Category not found.', ephemeral: true });
-
-    const existing = db.prepare('SELECT COUNT(*) as c FROM ticket_form_questions WHERE category_id = ?').get(categoryId) as any;
-    if (existing.c >= 5) return interaction.reply({ content: '❌ Max 5 questions per category (Discord modal limit).', ephemeral: true });
-
-    db.prepare('INSERT INTO ticket_form_questions (category_id, guild_id, label, style, placeholder, required, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .run(categoryId, interaction.guildId, label, type, placeholder, required ? 1 : 0, existing.c);
-
-    await interaction.reply({ content: `✅ Question added to category!`, ephemeral: true });
-  }
-
-  // ─── Config Command ──────────────────────────────────────────────────────────
-  private async cmdConfig(interaction: any, db: DatabaseSync) {
-    const categoryId       = interaction.options.getString('category_id', true);
-    const autoclose        = interaction.options.getBoolean('autoclose');
-    const autocloseHours   = interaction.options.getInteger('autoclose_hours');
-    const cooldown         = interaction.options.getBoolean('cooldown');
-    const cooldownMinutes  = interaction.options.getInteger('cooldown_minutes');
-    const userMax          = interaction.options.getInteger('user_max');
-
-    db.prepare('INSERT OR IGNORE INTO ticket_category_config (category_id, guild_id) VALUES (?, ?)').run(categoryId, interaction.guildId);
-
-    const updates: string[] = [];
-    const vals: any[]       = [];
-    if (autoclose       !== null) { updates.push('autoclose_enabled = ?');  vals.push(autoclose ? 1 : 0); }
-    if (autocloseHours  !== null) { updates.push('autoclose_hours = ?');    vals.push(autocloseHours); }
-    if (cooldown        !== null) { updates.push('cooldown_enabled = ?');   vals.push(cooldown ? 1 : 0); }
-    if (cooldownMinutes !== null) { updates.push('cooldown_minutes = ?');   vals.push(cooldownMinutes); }
-    if (userMax         !== null) { updates.push('user_max = ?');           vals.push(userMax); }
-
-    if (updates.length) {
-      vals.push(categoryId);
-      db.prepare(`UPDATE ticket_category_config SET ${updates.join(', ')} WHERE category_id = ?`).run(...vals);
-    }
-
-    await interaction.reply({ content: '✅ Category config updated!', ephemeral: true });
-  }
-
-  // ─── Deploy/Rebuild ──────────────────────────────────────────────────────────
-  private async cmdDeploy(interaction: any, db: DatabaseSync) {
-    await interaction.deferReply({ ephemeral: true });
-    const panelId = interaction.options.getString('panel_id', true);
-    await this.rebuildPanelMessage(panelId, db, interaction.guild);
-    await interaction.editReply({ content: '✅ Panel refreshed!' });
-  }
-
-  async rebuildPanelMessage(panelId: string, db: DatabaseSync, guild: any) {
-    const panel = db.prepare('SELECT * FROM ticket_panels WHERE id = ?').get(panelId) as any;
-    if (!panel) return false;
-    const categories = db.prepare('SELECT * FROM ticket_categories WHERE panel_id = ? ORDER BY sort_order ASC').all(panelId) as any[];
-    const channel    = guild.channels.cache.get(panel.channel_id) as TextChannel | undefined;
-    if (!channel) return false;
-
-    try {
-      const embed = new EmbedBuilder()
-        .setTitle(panel.title)
-        .setDescription(panel.description ?? 'Select a category below to open a ticket.')
-        .setColor(panel.color ?? 0x5865F2)
-        .setFooter({ text: `Panel ID: ${panel.id}` })
-        .setTimestamp();
-
-      const style = panel.style ?? panel.panel_style ?? 'buttons';
-      const components: any[] = [];
-
-      if (style === 'dropdown' && categories.length > 0) {
-        const menu = new StringSelectMenuBuilder()
-          .setCustomId(`ticket:dropdown:${panelId}`)
-          .setPlaceholder('Select a ticket type...')
-          .addOptions(categories.map(c =>
-            new StringSelectMenuOptionBuilder()
-              .setLabel(c.label)
-              .setValue(c.id)
-              .setDescription(c.description || 'Open a support ticket')
-              .setEmoji(c.emoji || '🎫')
-          ));
-        components.push(new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu));
-      } else {
-        for (let i = 0; i < categories.length; i += 5) {
-          const row = new ActionRowBuilder<ButtonBuilder>();
-          for (const cat of categories.slice(i, i + 5)) {
-            const btn = new ButtonBuilder()
-              .setCustomId(`ticket:create:${cat.id}`)
-              .setLabel(cat.label)
-              .setStyle(BTN_COLOR[cat.color] ?? ButtonStyle.Primary);
-            if (cat.emoji) btn.setEmoji(cat.emoji);
-            row.addComponents(btn);
-          }
-          components.push(row);
-        }
-      }
-
-      // If no message yet, send a new one; otherwise edit the existing one
-      if (!panel.message_id) {
-        const msg = await channel.send({ embeds: [embed], components });
-        db.prepare('UPDATE ticket_panels SET message_id = ? WHERE id = ?').run(msg.id, panelId);
-      } else {
-        try {
-          const msg = await channel.messages.fetch(panel.message_id);
-          await msg.edit({ embeds: [embed], components });
-        } catch {
-          // Message was deleted — send a fresh one
-          const msg = await channel.send({ embeds: [embed], components });
-          db.prepare('UPDATE ticket_panels SET message_id = ? WHERE id = ?').run(msg.id, panelId);
-        }
-      }
-      return true;
-    } catch (err) {
-      console.error('[Tickets] rebuildPanelMessage error:', err);
-      return false;
-    }
-  }
-
-  // ─── Handle Create Button Click ──────────────────────────────────────────────
-  private async handleCreateBtn(interaction: any) {
-    const categoryId = interaction.customId.split(':')[2];
-    await this.startTicketCreation(interaction, categoryId);
-  }
-
-  // ─── Handle Dropdown Select ──────────────────────────────────────────────────
-  private async handleDropdownCreate(interaction: any) {
-    const categoryId = interaction.values[0];
-    await this.startTicketCreation(interaction, categoryId);
-  }
-
-  // ─── Ticket Creation Flow ────────────────────────────────────────────────────
-  private async startTicketCreation(interaction: any, categoryId: string) {
-    const db  = this.db;
-    const cat = db.prepare('SELECT * FROM ticket_categories WHERE id = ?').get(categoryId) as any;
-    if (!cat) return interaction.reply({ content: '❌ Category not found.', ephemeral: true });
-
-    const cfg = db.prepare('SELECT * FROM ticket_category_config WHERE category_id = ?').get(categoryId) as any;
-
-    // ── Blacklist check ──────────────────────────────────────────────────────
-    const blacklisted = db.prepare('SELECT id FROM ticket_blacklist WHERE guild_id = ? AND user_id = ?')
-      .get(interaction.guildId, interaction.user.id);
-    if (blacklisted) {
-      return interaction.reply({
-        embeds: [new EmbedBuilder().setColor(0xED4245).setDescription('❌ You are blacklisted from creating tickets.')],
-        ephemeral: true,
-      });
-    }
-
-    // ── Cooldown check ───────────────────────────────────────────────────────
-    if (cfg?.cooldown_enabled) {
-      const remaining = checkCooldown(db, interaction.user.id, categoryId, cfg.cooldown_minutes);
-      if (remaining > 0) {
-        return interaction.reply({
-          embeds: [new EmbedBuilder().setColor(0xFEE75C).setDescription(`⏱ Cooldown active. Try again in **${Math.ceil(remaining / 60)}m ${remaining % 60}s**.`)],
-          ephemeral: true,
-        });
-      }
-    }
-
-    // ── User ticket limit ────────────────────────────────────────────────────
-    if (cfg?.user_max > 0) {
-      const userCount = (db.prepare("SELECT COUNT(*) as c FROM tickets WHERE creator_id = ? AND category_id = ? AND status = 'open'").get(interaction.user.id, categoryId) as any).c;
-      if (userCount >= cfg.user_max) {
-        return interaction.reply({
-          embeds: [new EmbedBuilder().setColor(0xED4245).setDescription(`❌ You already have **${userCount}/${cfg.user_max}** open tickets in this category.`)],
-          ephemeral: true,
-        });
-      }
-    }
-
-    // ── Check for questions — show modal if any ──────────────────────────────
-    const questions = db.prepare('SELECT * FROM ticket_form_questions WHERE category_id = ? ORDER BY sort_order ASC LIMIT 5').all(categoryId) as any[];
-
-    if (questions.length > 0) {
-      const modal = new ModalBuilder()
-        .setCustomId(`ticket:questions:${categoryId}`)
-        .setTitle(`✏️ ${cat.label}`);
-
-      for (const q of questions) {
-        const input = new TextInputBuilder()
-          .setCustomId(`q_${q.id}`)
-          .setLabel(q.label.slice(0, 45))
-          .setStyle(q.style === 'paragraph' ? TextInputStyle.Paragraph : TextInputStyle.Short)
-          .setRequired(!!q.required);
-        if (q.placeholder) input.setPlaceholder(q.placeholder.slice(0, 100));
-        modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(input));
-      }
-
-      return interaction.showModal(modal);
-    }
-
-    // ── No questions — create immediately ───────────────────────────────────
-    await interaction.deferReply({ ephemeral: true });
-    await this.createTicketChannel(interaction, cat, cfg, {});
-
-    // Reset the panel message so the dropdown shows the placeholder again
-    // (otherwise Discord keeps the selected option checked for the user)
-    try {
-      if (interaction.message) {
-        await interaction.message.edit({ components: interaction.message.components });
-      }
-    } catch { /* panel message may have been deleted — ignore */ }
-  }
-
-  // ─── Handle Questions Modal Submit ───────────────────────────────────────────
-  private async handleQuestionsModal(interaction: any) {
-    const categoryId = interaction.customId.split(':')[2];
-    const db         = this.db;
-    const cat        = db.prepare('SELECT * FROM ticket_categories WHERE id = ?').get(categoryId) as any;
-    const cfg        = db.prepare('SELECT * FROM ticket_category_config WHERE category_id = ?').get(categoryId) as any;
-    if (!cat) return interaction.reply({ content: '❌ Category not found.', ephemeral: true });
-
-    await interaction.deferReply({ ephemeral: true });
-
-    // Collect answers
-    const answers: Record<string, string> = {};
-    const questions = db.prepare('SELECT * FROM ticket_form_questions WHERE category_id = ? ORDER BY sort_order').all(categoryId) as any[];
-    for (const q of questions) {
-      try {
-        answers[q.label] = interaction.fields.getTextInputValue(`q_${q.id}`) ?? '';
-      } catch {}
-    }
-
-    await this.createTicketChannel(interaction, cat, cfg, answers);
-  }
-
-  // ─── Core: Create Ticket Channel ─────────────────────────────────────────────
-  private async createTicketChannel(interaction: any, cat: any, cfg: any, answers: Record<string, string>) {
+  // ─── Button / Modal Interaction Handler ───────────────────────────
+  async onInteraction(interaction: any) {
     const db = this.db;
 
-    // Duplicate check
-    const existing = db.prepare("SELECT channel_id FROM tickets WHERE creator_id = ? AND category_id = ? AND status = 'open' AND guild_id = ?")
-      .get(interaction.user.id, cat.id, interaction.guildId) as any;
-    if (existing) {
-      return interaction.editReply({ content: `❌ You already have an open ticket: <#${existing.channel_id}>` });
-    }
+    // ── Buttons ───────────────────────────────────────────────────────
+    if (interaction.isButton() && interaction.customId.startsWith('tv:')) {
+      const action = interaction.customId.split(':')[1];
+      const vcId   = this.db.prepare(
+        'SELECT channel_id FROM temp_voice_channels WHERE owner_id = ? AND guild_id = ?'
+      ).get(interaction.user.id, interaction.guildId) as any;
 
-    const ticketNum = ((db.prepare('SELECT COUNT(*) as c FROM tickets WHERE guild_id = ?').get(interaction.guildId) as any).c) + 1;
-    const ticketId  = nanoid(10);
+      // Actions that don't require ownership
+      if (action === 'claim') return this.cmdClaim(interaction, db);
+      if (action === 'info')  return this.cmdInfo(interaction, db);
 
-    const adminRoles:    string[] = JSON.parse(cat.admin_roles    ?? '[]');
-    const readonlyRoles: string[] = JSON.parse(cat.readonly_roles ?? '[]');
+      // All other actions require ownership
+      if (!vcId) return interaction.reply({ embeds: [this.errEmbed('You don\'t own a voice channel.')], ephemeral: true });
 
-    const permOverwrites: any[] = [
-      { id: interaction.guild.roles.everyone.id,  deny:  [PermissionFlagsBits.ViewChannel] },
-      { id: interaction.user.id,                  allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
-    ];
-    for (const r of adminRoles) {
-      permOverwrites.push({ id: r, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageMessages, PermissionFlagsBits.ReadMessageHistory] });
-    }
-    for (const r of readonlyRoles) {
-      permOverwrites.push({ id: r, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory], deny: [PermissionFlagsBits.SendMessages] });
-    }
-
-    const channelName = `${cat.channel_prefix}${ticketNum.toString().padStart(4, '0')}`;
-    const ticketChannel = await interaction.guild.channels.create({
-      name: channelName,
-      type: ChannelType.GuildText,
-      parent: cat.category_id || undefined,
-      permissionOverwrites: permOverwrites,
-      topic: `Ticket #${ticketNum} | ${cat.label} | Created by ${interaction.user.tag}`,
-    }) as TextChannel;
-
-    if (cfg?.slowmode_enabled && cfg.slowmode_seconds > 0) {
-      await ticketChannel.setRateLimitPerUser(cfg.slowmode_seconds);
-    }
-
-    db.prepare(`
-      INSERT INTO tickets (id, guild_id, channel_id, creator_id, category_id, ticket_number, question_answers)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(ticketId, interaction.guildId, ticketChannel.id, interaction.user.id, cat.id, ticketNum, JSON.stringify(answers));
-
-    // Set cooldown after successful creation
-    if (cfg?.cooldown_enabled) setCooldown(db, interaction.user.id, cat.id);
-
-    // Build welcome embed
-    const welcomeEmbed = new EmbedBuilder()
-      .setColor(0x5865F2)
-      .setTitle(`🎫 Ticket #${ticketNum} — ${cat.label}`)
-      .setDescription(cat.welcome_message || `Welcome ${interaction.user}!\nSupport will be with you shortly.`)
-      .addFields(
-        { name: 'Opened by', value: `${interaction.user}`, inline: true },
-        { name: 'Category',  value: cat.label,              inline: true },
-        { name: 'Priority',  value: '⬜ None',               inline: true },
-      );
-
-    // Attach question answers
-    if (Object.keys(answers).length > 0) {
-      for (const [q, a] of Object.entries(answers)) {
-        if (a) welcomeEmbed.addFields({ name: q, value: a.slice(0, 1024), inline: false });
+      switch (action) {
+        case 'lock':     return this.cmdLock(interaction, db);
+        case 'unlock':   return this.cmdUnlock(interaction, db);
+        case 'rename': {
+          const modal = new ModalBuilder()
+            .setCustomId('tv-modal:rename')
+            .setTitle('Rename Channel')
+            .addComponents(new ActionRowBuilder<any>().addComponents(
+              new TextInputBuilder()
+                .setCustomId('name')
+                .setLabel('New channel name')
+                .setStyle(TextInputStyle.Short)
+                .setMaxLength(100)
+                .setRequired(true)
+            ));
+          return interaction.showModal(modal);
+        }
+        case 'limit': {
+          const modal = new ModalBuilder()
+            .setCustomId('tv-modal:limit')
+            .setTitle('Set User Limit')
+            .addComponents(new ActionRowBuilder<any>().addComponents(
+              new TextInputBuilder()
+                .setCustomId('limit')
+                .setLabel('Max users (0 = unlimited)')
+                .setStyle(TextInputStyle.Short)
+                .setMaxLength(2)
+                .setRequired(true)
+            ));
+          return interaction.showModal(modal);
+        }
+        case 'permit': {
+          const modal = new ModalBuilder()
+            .setCustomId('tv-modal:permit')
+            .setTitle('Permit User')
+            .addComponents(new ActionRowBuilder<any>().addComponents(
+              new TextInputBuilder()
+                .setCustomId('userId')
+                .setLabel('User ID to permit')
+                .setStyle(TextInputStyle.Short)
+                .setMaxLength(20)
+                .setRequired(true)
+            ));
+          return interaction.showModal(modal);
+        }
+        case 'reject': {
+          const modal = new ModalBuilder()
+            .setCustomId('tv-modal:reject')
+            .setTitle('Reject User')
+            .addComponents(new ActionRowBuilder<any>().addComponents(
+              new TextInputBuilder()
+                .setCustomId('userId')
+                .setLabel('User ID to reject/kick')
+                .setStyle(TextInputStyle.Short)
+                .setMaxLength(20)
+                .setRequired(true)
+            ));
+          return interaction.showModal(modal);
+        }
+        case 'transfer': {
+          const modal = new ModalBuilder()
+            .setCustomId('tv-modal:transfer')
+            .setTitle('Transfer Ownership')
+            .addComponents(new ActionRowBuilder<any>().addComponents(
+              new TextInputBuilder()
+                .setCustomId('userId')
+                .setLabel('User ID to transfer to')
+                .setStyle(TextInputStyle.Short)
+                .setMaxLength(20)
+                .setRequired(true)
+            ));
+          return interaction.showModal(modal);
+        }
+        case 'kick': {
+          const modal = new ModalBuilder()
+            .setCustomId('tv-modal:kick')
+            .setTitle('Kick User from VC')
+            .addComponents(new ActionRowBuilder<any>().addComponents(
+              new TextInputBuilder()
+                .setCustomId('userId')
+                .setLabel('User ID to kick')
+                .setStyle(TextInputStyle.Short)
+                .setMaxLength(20)
+                .setRequired(true)
+            ));
+          return interaction.showModal(modal);
+        }
       }
     }
 
-    const controlRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
-      new ButtonBuilder().setCustomId('ticket:close:').setLabel('Close').setStyle(ButtonStyle.Danger).setEmoji('🔒'),
-      new ButtonBuilder().setCustomId('ticket:claim:').setLabel('Claim').setStyle(ButtonStyle.Primary).setEmoji('🙋'),
-      new ButtonBuilder().setCustomId('ticket:transcript:').setLabel('Transcript').setStyle(ButtonStyle.Secondary).setEmoji('📄'),
-    );
+    // ── Modals ────────────────────────────────────────────────────────
+    if (interaction.isModalSubmit() && interaction.customId.startsWith('tv-modal:')) {
+      const action = interaction.customId.split(':')[1];
+      const vcRow  = this.db.prepare(
+        'SELECT channel_id FROM temp_voice_channels WHERE owner_id = ? AND guild_id = ?'
+      ).get(interaction.user.id, interaction.guildId) as any;
+      if (!vcRow) return interaction.reply({ embeds: [this.errEmbed('You don\'t own a voice channel.')], ephemeral: true });
 
-    const adminMentions = adminRoles.map(r => `<@&${r}>`).join(' ');
-    await ticketChannel.send({
-      content: adminMentions || undefined,
-      embeds:  [welcomeEmbed],
-      components: [controlRow],
-    });
+      const channel = interaction.guild?.channels.cache.get(vcRow.channel_id);
+      if (!channel) return interaction.reply({ embeds: [this.errEmbed('Channel not found.')], ephemeral: true });
 
-    await interaction.editReply({ content: `✅ Ticket created: ${ticketChannel}` });
-  }
-
-  // ─── Close ───────────────────────────────────────────────────────────────────
-  private async cmdClose(interaction: any, db: DatabaseSync) {
-    const ticket = db.prepare("SELECT * FROM tickets WHERE channel_id = ? AND status = 'open'").get(interaction.channelId) as any;
-    if (!ticket) return interaction.reply({ content: '❌ Not an open ticket channel.', ephemeral: true });
-
-    const member = interaction.member as GuildMember;
-    const isOwner = ticket.creator_id === interaction.user.id;
-    const canClose = isOwner || isStaff(member, db) || member.permissions.has(PermissionFlagsBits.ManageChannels);
-    if (!canClose) return interaction.reply({ content: '❌ No permission to close this ticket.', ephemeral: true });
-
-    const reason = interaction.options?.getString?.('reason') ?? 'No reason provided';
-    await this.closeTicket(interaction, ticket, reason, db);
-  }
-
-  private async handleQuickClose(interaction: any) {
-    const ticket = this.db.prepare('SELECT * FROM tickets WHERE channel_id = ?').get(interaction.channelId) as any;
-    if (!ticket) return interaction.reply({ content: '❌ Not a ticket channel.', ephemeral: true });
-    await this.closeTicket(interaction, ticket, 'Closed via button', this.db);
-  }
-
-  private async closeTicket(interaction: any, ticket: any, reason: string, db: DatabaseSync) {
-    await interaction.deferReply();
-    db.prepare("UPDATE tickets SET status = 'closed', closed_at = unixepoch() WHERE id = ?").run(ticket.id);
-
-    const channel = interaction.channel as TextChannel;
-
-    // Auto-generate and save transcript on close
-    try {
-      const messages = await channel.messages.fetch({ limit: 100 });
-      const sorted   = [...messages.values()].reverse();
-      const html     = this.buildTranscriptHTML(channel.name, sorted, ticket);
-      db.prepare('UPDATE tickets SET transcript = ? WHERE id = ?').run(html, ticket.id);
-    } catch (e) {
-      console.error('[Tickets] Auto-transcript error on close:', e);
-    }
-
-    try {
-      await channel.permissionOverwrites.edit(ticket.creator_id, { SendMessages: false });
-    } catch {}
-
-    const { config } = await import('../../config');
-    const transcriptUrl = `${config.panelUrl}/api/tickets/${ticket.guild_id}/${ticket.id}/transcript`;
-
-    const closeRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
-      new ButtonBuilder().setCustomId('ticket:reopen:').setLabel('Reopen').setStyle(ButtonStyle.Success).setEmoji('🔓'),
-      new ButtonBuilder().setCustomId('ticket:transcript:').setLabel('Transcript').setStyle(ButtonStyle.Secondary).setEmoji('📄'),
-      new ButtonBuilder().setCustomId('ticket:delete:').setLabel('Delete').setStyle(ButtonStyle.Danger).setEmoji('🗑️'),
-    );
-
-    await interaction.editReply({
-      embeds: [new EmbedBuilder()
-        .setColor(0xED4245)
-        .setTitle('🔒 Ticket Closed')
-        .addFields(
-          { name: 'Closed by',  value: `${interaction.user}`, inline: true },
-          { name: 'Reason',     value: reason,                inline: true },
-          { name: 'Transcript', value: `[View Transcript](${transcriptUrl})`, inline: false },
-        )
-        .setTimestamp()],
-      components: [closeRow],
-    });
-  }
-
-  // ─── Reopen ──────────────────────────────────────────────────────────────────
-  private async cmdReopen(interaction: any, db: DatabaseSync) {
-    const ticket = db.prepare('SELECT * FROM tickets WHERE channel_id = ?').get(interaction.channelId) as any;
-    if (!ticket || ticket.status !== 'closed') return interaction.reply({ content: '❌ Not a closed ticket.', ephemeral: true });
-
-    db.prepare("UPDATE tickets SET status = 'open', closed_at = NULL, last_activity = unixepoch() WHERE id = ?").run(ticket.id);
-    try { await (interaction.channel as TextChannel).permissionOverwrites.edit(ticket.creator_id, { SendMessages: true, ViewChannel: true }); } catch {}
-
-    await interaction.reply({
-      embeds: [new EmbedBuilder().setColor(0x57F287).setTitle('🔓 Ticket Reopened').setTimestamp()],
-    });
-  }
-
-  // ─── Move ────────────────────────────────────────────────────────────────────
-  private async cmdMove(interaction: any, db: DatabaseSync) {
-    const ticket = db.prepare('SELECT * FROM tickets WHERE channel_id = ?').get(interaction.channelId) as any;
-    if (!ticket) return interaction.reply({ content: '❌ Not a ticket channel.', ephemeral: true });
-
-    const targetCatId = interaction.options.getString('category_id', true);
-    const targetCat   = db.prepare('SELECT * FROM ticket_categories WHERE id = ? AND guild_id = ?').get(targetCatId, interaction.guildId) as any;
-    if (!targetCat) return interaction.reply({ content: '❌ Target category not found.', ephemeral: true });
-
-    const reason = interaction.options.getString('reason') ?? 'No reason';
-
-    // Move Discord category
-    if (targetCat.category_id) {
-      await interaction.channel.setParent(targetCat.category_id, { lockPermissions: false }).catch(() => {});
-    }
-
-    db.prepare('UPDATE tickets SET category_id = ?, last_activity = unixepoch() WHERE id = ?').run(targetCatId, ticket.id);
-
-    await interaction.reply({
-      embeds: [new EmbedBuilder()
-        .setColor(0x5865F2)
-        .setTitle('📦 Ticket Moved')
-        .addFields(
-          { name: 'Moved to', value: targetCat.label, inline: true },
-          { name: 'Reason',   value: reason,           inline: true },
-        )],
-    });
-  }
-
-  // ─── Transfer ────────────────────────────────────────────────────────────────
-  private async cmdTransfer(interaction: any, db: DatabaseSync) {
-    const ticket = db.prepare('SELECT * FROM tickets WHERE channel_id = ?').get(interaction.channelId) as any;
-    if (!ticket) return interaction.reply({ content: '❌ Not a ticket channel.', ephemeral: true });
-
-    const newOwner = interaction.options.getUser('user', true);
-    const reason   = interaction.options.getString('reason') ?? 'No reason';
-    const channel  = interaction.channel as TextChannel;
-
-    await channel.permissionOverwrites.edit(ticket.creator_id, { ViewChannel: false, SendMessages: false }).catch(() => {});
-    await channel.permissionOverwrites.edit(newOwner.id,       { ViewChannel: true,  SendMessages: true  }).catch(() => {});
-
-    db.prepare('UPDATE tickets SET creator_id = ?, last_activity = unixepoch() WHERE id = ?').run(newOwner.id, ticket.id);
-
-    await interaction.reply({
-      embeds: [new EmbedBuilder()
-        .setColor(0x5865F2)
-        .setTitle('🔄 Ticket Transferred')
-        .setDescription(`Ownership transferred to ${newOwner}`)
-        .addFields({ name: 'Reason', value: reason, inline: false })],
-    });
-  }
-
-  // ─── Priority ────────────────────────────────────────────────────────────────
-  private async cmdPriority(interaction: any, db: DatabaseSync) {
-    const ticket = db.prepare('SELECT * FROM tickets WHERE channel_id = ?').get(interaction.channelId) as any;
-    if (!ticket) return interaction.reply({ content: '❌ Not a ticket channel.', ephemeral: true });
-
-    const level = interaction.options.getString('level', true);
-    db.prepare('UPDATE tickets SET priority = ?, last_activity = unixepoch() WHERE id = ?').run(level, ticket.id);
-
-    await interaction.reply({
-      embeds: [new EmbedBuilder()
-        .setColor(PRIORITY_COLORS[level] ?? 0x5865F2)
-        .setTitle('🎯 Priority Updated')
-        .setDescription(`Ticket priority set to **${PRIORITY_LABELS[level]}**`)],
-    });
-  }
-
-  // ─── Topic ───────────────────────────────────────────────────────────────────
-  private async cmdTopic(interaction: any, db: DatabaseSync) {
-    const ticket = db.prepare('SELECT id FROM tickets WHERE channel_id = ?').get(interaction.channelId);
-    if (!ticket) return interaction.reply({ content: '❌ Not a ticket channel.', ephemeral: true });
-    const topic = interaction.options.getString('topic', true);
-    await interaction.channel.setTopic(topic);
-    await interaction.reply({ content: `✅ Topic updated.`, ephemeral: true });
-  }
-
-  // ─── Claim / Unclaim ─────────────────────────────────────────────────────────
-  private async cmdClaim(interaction: any, db: DatabaseSync) {
-    const ticket = db.prepare("SELECT * FROM tickets WHERE channel_id = ? AND status = 'open'").get(interaction.channelId) as any;
-    if (!ticket) return interaction.reply({ content: '❌ Not an open ticket.', ephemeral: true });
-
-    db.prepare('UPDATE tickets SET claimed_by = ?, last_activity = unixepoch() WHERE id = ?').run(interaction.user.id, ticket.id);
-    await interaction.reply({
-      embeds: [new EmbedBuilder().setColor(0xFEE75C).setDescription(`🙋 **${interaction.user.displayName}** has claimed this ticket.`)],
-    });
-  }
-
-  private async cmdUnclaim(interaction: any, db: DatabaseSync) {
-    const ticket = db.prepare('SELECT id FROM tickets WHERE channel_id = ?').get(interaction.channelId);
-    if (!ticket) return interaction.reply({ content: '❌ Not a ticket channel.', ephemeral: true });
-    db.prepare('UPDATE tickets SET claimed_by = NULL WHERE id = ?').run((ticket as any).id);
-    await interaction.reply({ content: '✅ Ticket unclaimed.', ephemeral: true });
-  }
-
-  // ─── Add / Remove User ───────────────────────────────────────────────────────
-  private async cmdAdd(interaction: any, db: DatabaseSync) {
-    const ticket = db.prepare('SELECT id FROM tickets WHERE channel_id = ?').get(interaction.channelId);
-    if (!ticket) return interaction.reply({ content: '❌ Not a ticket channel.', ephemeral: true });
-    const target = interaction.options.getMember('user') as GuildMember;
-    await (interaction.channel as TextChannel).permissionOverwrites.edit(target.id, { ViewChannel: true, SendMessages: true });
-    db.prepare('INSERT OR IGNORE INTO ticket_participants (ticket_id, user_id, added_by) VALUES (?, ?, ?)').run((ticket as any).id, target.id, interaction.user.id);
-    await interaction.reply({ content: `✅ Added ${target} to the ticket.`, ephemeral: true });
-  }
-
-  private async cmdRemove(interaction: any, db: DatabaseSync) {
-    const ticket = db.prepare('SELECT id FROM tickets WHERE channel_id = ?').get(interaction.channelId);
-    if (!ticket) return interaction.reply({ content: '❌ Not a ticket channel.', ephemeral: true });
-    const target = interaction.options.getMember('user') as GuildMember;
-    await (interaction.channel as TextChannel).permissionOverwrites.edit(target.id, { ViewChannel: false });
-    await interaction.reply({ content: `✅ Removed ${target} from the ticket.`, ephemeral: true });
-  }
-
-  // ─── Rename ──────────────────────────────────────────────────────────────────
-  private async cmdRename(interaction: any, db: DatabaseSync) {
-    const ticket = db.prepare('SELECT id FROM tickets WHERE channel_id = ?').get(interaction.channelId);
-    if (!ticket) return interaction.reply({ content: '❌ Not a ticket channel.', ephemeral: true });
-    const name = interaction.options.getString('name', true);
-    await interaction.channel.edit({ name });
-    await interaction.reply({ content: `✅ Renamed to **${name}**.`, ephemeral: true });
-  }
-
-  // ─── Stats ───────────────────────────────────────────────────────────────────
-  private async cmdStats(interaction: any, db: DatabaseSync) {
-    const user = interaction.options.getUser('user');
-
-    if (user) {
-      const opened = (db.prepare('SELECT COUNT(*) as c FROM tickets WHERE guild_id = ? AND creator_id = ?').get(interaction.guildId, user.id) as any).c;
-      const open   = (db.prepare("SELECT COUNT(*) as c FROM tickets WHERE guild_id = ? AND creator_id = ? AND status = 'open'").get(interaction.guildId, user.id) as any).c;
-      const closed = (db.prepare("SELECT COUNT(*) as c FROM tickets WHERE guild_id = ? AND creator_id = ? AND status = 'closed'").get(interaction.guildId, user.id) as any).c;
-
-      await interaction.reply({
-        embeds: [new EmbedBuilder()
-          .setColor(0x5865F2)
-          .setTitle(`📊 Stats for ${user.tag}`)
-          .setThumbnail(user.displayAvatarURL())
-          .addFields(
-            { name: 'Total Opened', value: String(opened), inline: true },
-            { name: 'Currently Open', value: String(open), inline: true },
-            { name: 'Closed',        value: String(closed), inline: true },
-          )],
-        ephemeral: true,
-      });
-    } else {
-      const total  = (db.prepare('SELECT COUNT(*) as c FROM tickets WHERE guild_id = ?').get(interaction.guildId) as any).c;
-      const open   = (db.prepare("SELECT COUNT(*) as c FROM tickets WHERE guild_id = ? AND status = 'open'").get(interaction.guildId) as any).c;
-      const closed = (db.prepare("SELECT COUNT(*) as c FROM tickets WHERE guild_id = ? AND status = 'closed'").get(interaction.guildId) as any).c;
-      const today  = (db.prepare("SELECT COUNT(*) as c FROM tickets WHERE guild_id = ? AND created_at > unixepoch()-86400").get(interaction.guildId) as any).c;
-
-      // Top categories
-      const topCats = db.prepare(`
-        SELECT tc.label, COUNT(t.id) as cnt
-        FROM tickets t LEFT JOIN ticket_categories tc ON t.category_id = tc.id
-        WHERE t.guild_id = ?
-        GROUP BY t.category_id ORDER BY cnt DESC LIMIT 5
-      `).all(interaction.guildId) as any[];
-
-      await interaction.reply({
-        embeds: [new EmbedBuilder()
-          .setColor(0x5865F2)
-          .setTitle('📊 Ticket Statistics')
-          .addFields(
-            { name: 'Total Tickets',  value: String(total),  inline: true },
-            { name: 'Open',           value: String(open),   inline: true },
-            { name: 'Closed',         value: String(closed), inline: true },
-            { name: 'Opened Today',   value: String(today),  inline: true },
-            { name: 'Top Categories', value: topCats.length ? topCats.map(c => `**${c.label}**: ${c.cnt}`).join('\n') : 'None', inline: false },
-          )],
-        ephemeral: true,
-      });
+      switch (action) {
+        case 'rename': {
+          const name = interaction.fields.getTextInputValue('name').slice(0, 100);
+          await (channel as any).setName(name);
+          this.db.prepare('UPDATE temp_voice_user_settings SET channel_name = ? WHERE user_id = ?').run(name, interaction.user.id);
+          return interaction.reply({ embeds: [this.okEmbed(`Channel renamed to **${name}**.`)], ephemeral: true });
+        }
+        case 'limit': {
+          const limit = parseInt(interaction.fields.getTextInputValue('limit')) || 0;
+          await (channel as any).setUserLimit(limit);
+          this.db.prepare('INSERT OR REPLACE INTO temp_voice_user_settings (user_id, channel_limit) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET channel_limit = ?').run(interaction.user.id, limit, limit);
+          return interaction.reply({ embeds: [this.okEmbed(`Limit set to **${limit === 0 ? 'unlimited' : limit}**.`)], ephemeral: true });
+        }
+        case 'permit': {
+          const userId = interaction.fields.getTextInputValue('userId').trim();
+          try {
+            await (channel as any).permissionOverwrites.edit(userId, { Connect: true });
+            return interaction.reply({ embeds: [this.okEmbed(`<@${userId}> can now join your channel.`)], ephemeral: true });
+          } catch { return interaction.reply({ embeds: [this.errEmbed('Invalid user ID.')], ephemeral: true }); }
+        }
+        case 'reject': {
+          const userId = interaction.fields.getTextInputValue('userId').trim();
+          try {
+            await (channel as any).permissionOverwrites.edit(userId, { Connect: false });
+            const member = interaction.guild?.members.cache.get(userId);
+            if (member?.voice.channelId === vcRow.channel_id) {
+              await member.voice.disconnect('Rejected from channel').catch(() => {});
+            }
+            return interaction.reply({ embeds: [this.okEmbed(`<@${userId}> has been blocked from your channel.`)], ephemeral: true });
+          } catch { return interaction.reply({ embeds: [this.errEmbed('Invalid user ID.')], ephemeral: true }); }
+        }
+        case 'transfer': {
+          const userId = interaction.fields.getTextInputValue('userId').trim();
+          try {
+            this.db.prepare('UPDATE temp_voice_channels SET owner_id = ? WHERE channel_id = ?').run(userId, vcRow.channel_id);
+            await (channel as any).permissionOverwrites.edit(userId, { Connect: true, ManageChannels: true });
+            await (channel as any).permissionOverwrites.edit(interaction.user.id, { ManageChannels: null });
+            return interaction.reply({ embeds: [this.okEmbed(`Ownership transferred to <@${userId}>.`)], ephemeral: true });
+          } catch { return interaction.reply({ embeds: [this.errEmbed('Invalid user ID.')], ephemeral: true }); }
+        }
+        case 'kick': {
+          const userId = interaction.fields.getTextInputValue('userId').trim();
+          const member = interaction.guild?.members.cache.get(userId);
+          if (!member) return interaction.reply({ embeds: [this.errEmbed('User not found.')], ephemeral: true });
+          if (member.voice.channelId !== vcRow.channel_id) return interaction.reply({ embeds: [this.errEmbed('That user is not in your channel.')], ephemeral: true });
+          await member.voice.disconnect('Kicked from temp voice').catch(() => {});
+          return interaction.reply({ embeds: [this.okEmbed(`<@${userId}> has been removed from your channel.`)], ephemeral: true });
+        }
+      }
     }
   }
 
-  // ─── Blacklist ───────────────────────────────────────────────────────────────
-  private async cmdBlacklist(interaction: any, db: DatabaseSync) {
-    const action = interaction.options.getString('action', true);
-    const user   = interaction.options.getUser('user');
-    const reason = interaction.options.getString('reason') ?? null;
+  // ─── Voice State Update (core JTC logic) ──────────────────────────
+  async onVoiceStateUpdate(before: VoiceState, after: VoiceState) {
+    const member = after.member ?? before.member;
+    if (!member) return;
+    const guild = member.guild;
 
-    if (!isStaff(interaction.member as GuildMember, db) && !interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
-      return interaction.reply({ content: '❌ Staff only.', ephemeral: true });
-    }
+    const cfg = this.db.prepare(
+      'SELECT hub_channel_id, category_id, default_limit FROM temp_voice_config WHERE guild_id = ?'
+    ).get(guild.id) as any;
+    if (!cfg) return;
 
-    if (action === 'add') {
-      if (!user) return interaction.reply({ content: '❌ Specify a user.', ephemeral: true });
-      db.prepare('INSERT OR IGNORE INTO ticket_blacklist (guild_id, user_id, reason, added_by) VALUES (?, ?, ?, ?)').run(interaction.guildId, user.id, reason, interaction.user.id);
-      await interaction.reply({ embeds: [new EmbedBuilder().setColor(0xED4245).setDescription(`✅ **${user.tag}** has been blacklisted.${reason ? `\nReason: ${reason}` : ''}`)], ephemeral: true });
-
-    } else if (action === 'remove') {
-      if (!user) return interaction.reply({ content: '❌ Specify a user.', ephemeral: true });
-      const { changes } = db.prepare('DELETE FROM ticket_blacklist WHERE guild_id = ? AND user_id = ?').run(interaction.guildId, user.id) as any;
-      await interaction.reply({ content: changes ? `✅ **${user.tag}** removed from blacklist.` : `❌ **${user.tag}** is not blacklisted.`, ephemeral: true });
-
-    } else if (action === 'view') {
-      const list = db.prepare('SELECT user_id, reason, added_at FROM ticket_blacklist WHERE guild_id = ? ORDER BY added_at DESC LIMIT 20').all(interaction.guildId) as any[];
-      if (!list.length) return interaction.reply({ content: '📋 No blacklisted users.', ephemeral: true });
-      await interaction.reply({
-        embeds: [new EmbedBuilder()
-          .setColor(0xED4245)
-          .setTitle('🚫 Ticket Blacklist')
-          .setDescription(list.map(r => `<@${r.user_id}>${r.reason ? ` — ${r.reason}` : ''}`).join('\n'))],
-        ephemeral: true,
-      });
-    }
-  }
-
-  // ─── Transcript ──────────────────────────────────────────────────────────────
-  async cmdTranscript(interaction: any, db: DatabaseSync) {
-    await interaction.deferReply({ ephemeral: true });
-    const channel  = interaction.channel as TextChannel;
-    const messages = await channel.messages.fetch({ limit: 100 });
-    const sorted   = [...messages.values()].reverse();
-    const ticket   = db.prepare('SELECT * FROM tickets WHERE channel_id = ?').get(channel.id) as any;
-
-    const html = this.buildTranscriptHTML(channel.name, sorted, ticket);
-    if (ticket) db.prepare('UPDATE tickets SET transcript = ? WHERE channel_id = ?').run(html, channel.id);
-
-    // Build dashboard link — opens the rendered HTML in a browser, no file preview issues
-    const { config } = await import('../../config');
-    const transcriptUrl = ticket
-      ? `${config.panelUrl}/api/tickets/${ticket.guild_id}/${ticket.id}/transcript`
-      : null;
-
-    // Ephemeral reply with clickable link (only the requester sees this)
-    await interaction.editReply({
-      embeds: [new EmbedBuilder()
-        .setColor(0x5865F2)
-        .setTitle('📄 Transcript Ready')
-        .setDescription(transcriptUrl
-          ? `[**Click here to view the transcript**](${transcriptUrl})\n\nOpens in your browser as a properly formatted page.`
-          : 'Transcript generated and saved.')
-        .addFields(
-          { name: 'Ticket #',  value: ticket?.ticket_number?.toString() ?? '—', inline: true },
-          { name: 'Messages',  value: sorted.length.toString(),                  inline: true },
-        )
-        .setTimestamp()],
-    });
-
-    // Clean embed in the ticket channel — no file, no code preview
-    await channel.send({
-      embeds: [new EmbedBuilder()
-        .setColor(0x5865F2)
-        .setTitle('📄 Transcript Generated')
-        .setDescription(`Transcript created by <@${interaction.user.id}> · ${sorted.length} messages captured.`
-          + (transcriptUrl ? `\n[View Transcript](${transcriptUrl})` : ''))
-        .setTimestamp()],
-    });
-  }
-
-  private buildTranscriptHTML(channelName: string, messages: any[], ticket?: any): string {
-    const rows = messages.map(m => {
-      const avatar = m.author.displayAvatarURL({ size: 32, extension: 'png' });
-      const content = m.content
-        ? m.content.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br/>')
-        : '';
-      const attachments = [...m.attachments.values()].map((a: any) =>
-        a.contentType?.startsWith('image/')
-          ? `<img src="${a.url}" style="max-width:300px;max-height:200px;border-radius:4px;margin-top:6px;display:block"/>`
-          : `<a href="${a.url}" style="color:#7289da">${a.name}</a>`
-      ).join('');
-      const embeds = m.embeds.length ? `<div style="font-size:11px;color:#72767d;margin-top:4px">[${m.embeds.length} embed(s)]</div>` : '';
-      return `
-      <div class="msg">
-        <img class="av" src="${avatar}" onerror="this.src='https://cdn.discordapp.com/embed/avatars/0.png'"/>
-        <div class="body">
-          <span class="author" style="color:${m.author.bot ? '#5865f2' : '#fff'}">${m.author.username}${m.author.bot ? ' <span class="bot-tag">APP</span>' : ''}</span>
-          <span class="ts">${new Date(m.createdTimestamp).toLocaleString()}</span>
-          ${content ? `<div class="content">${content}</div>` : ''}
-          ${attachments}${embeds}
-        </div>
-      </div>`;
-    }).join('');
-
-    const statsRow = ticket ? `
-      <div class="stats">
-        <div class="stat"><div class="k">Ticket #</div><div class="v">${ticket.ticket_number}</div></div>
-        <div class="stat"><div class="k">Status</div><div class="v" style="text-transform:capitalize">${ticket.status}</div></div>
-        <div class="stat"><div class="k">Priority</div><div class="v" style="text-transform:capitalize">${ticket.priority ?? 'None'}</div></div>
-        <div class="stat"><div class="k">Created</div><div class="v">${new Date((ticket.created_at ?? 0) * 1000).toLocaleString()}</div></div>
-        <div class="stat"><div class="k">Messages</div><div class="v">${messages.length}</div></div>
-      </div>` : '';
-
-    return `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>#${channelName} — Mayhem Transcript</title>
-<style>
-  *{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:'gg sans','Helvetica Neue',sans-serif;background:#313338;color:#dbdee1;font-size:14px;line-height:1.4}
-  .header{background:#1e1f22;padding:20px 28px;border-bottom:2px solid #5865f2;display:flex;align-items:center;gap:14px}
-  .header-icon{width:42px;height:42px;background:#5865f2;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0}
-  .header h1{font-size:18px;color:#fff;font-weight:700}
-  .header p{font-size:12px;color:#949ba4;margin-top:3px}
-  .stats{display:flex;gap:10px;padding:12px 28px;background:#2b2d31;border-bottom:1px solid #404249;flex-wrap:wrap}
-  .stat{background:#1e1f22;padding:8px 14px;border-radius:6px;border-left:3px solid #5865f2}
-  .k{font-size:9px;color:#949ba4;text-transform:uppercase;letter-spacing:.06em;margin-bottom:2px}
-  .v{font-size:14px;color:#fff;font-weight:600}
-  .msgs{padding:16px 28px;max-width:900px}
-  .msg{display:flex;gap:14px;margin-bottom:16px;padding:4px 8px;border-radius:4px}
-  .msg:hover{background:#2e3035}
-  .av{width:38px;height:38px;border-radius:50%;flex-shrink:0;margin-top:2px}
-  .body{flex:1;min-width:0}
-  .author{font-weight:600;color:#fff;margin-right:8px}
-  .bot-tag{background:#5865f2;color:#fff;font-size:9px;font-weight:700;padding:1px 4px;border-radius:3px;margin-left:3px;vertical-align:middle}
-  .ts{font-size:11px;color:#949ba4}
-  .content{margin-top:3px;color:#dbdee1;white-space:pre-wrap;word-break:break-word}
-  .footer{text-align:center;padding:24px;color:#949ba4;font-size:12px;border-top:1px solid #404249;margin-top:16px}
-</style>
-</head>
-<body>
-<div class="header">
-  <div class="header-icon">📋</div>
-  <div>
-    <h1>#${channelName} — Transcript</h1>
-    <p>Generated by Mayhem Systems Discord Control · ${new Date().toLocaleString()}</p>
-  </div>
-</div>
-${statsRow}
-<div class="msgs">${rows}</div>
-<div class="footer">Mayhem Systems Discord Control · ${messages.length} message${messages.length !== 1 ? 's' : ''}</div>
-</body></html>`;
-  }
-
-  // ─── Delete ───────────────────────────────────────────────────────────────────
-  async cmdDelete(interaction: any, db: DatabaseSync) {
-    const ticket = db.prepare('SELECT * FROM tickets WHERE channel_id = ?').get(interaction.channelId) as any;
-    if (!ticket) return interaction.reply({ content: '❌ Not a ticket channel.', ephemeral: true });
-    if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageChannels) && !isStaff(interaction.member, db)) {
-      return interaction.reply({ content: '❌ Staff only.', ephemeral: true });
-    }
-    await interaction.reply({ content: '🗑️ Deleting in 5 seconds...' });
-    await new Promise(r => setTimeout(r, 5000));
-    db.prepare('DELETE FROM tickets WHERE id = ?').run(ticket.id);
-    await interaction.channel.delete('Ticket deleted').catch(() => {});
-  }
-
-  // ─── Autoclose Cron ──────────────────────────────────────────────────────────
-  private async runAutoclose() {
-    const db = this.db;
-    const openTickets = db.prepare("SELECT * FROM tickets WHERE status = 'open'").all() as any[];
-
-    for (const ticket of openTickets) {
-      const cfg = db.prepare('SELECT * FROM ticket_category_config WHERE category_id = ?').get(ticket.category_id) as any;
-      if (!cfg?.autoclose_enabled) continue;
-
-      const hoursSinceActivity = (Date.now() / 1000 - ticket.last_activity) / 3600;
-      if (hoursSinceActivity < cfg.autoclose_hours) continue;
-
-      // Auto-close
-      db.prepare("UPDATE tickets SET status = 'closed', closed_at = unixepoch() WHERE id = ?").run(ticket.id);
-
-      const guild = this.client.guilds.cache.find(g => g.id === ticket.guild_id);
-      if (!guild) continue;
-      const channel = guild.channels.cache.get(ticket.channel_id) as TextChannel | undefined;
-      if (channel) {
-        // Auto-generate transcript before closing
-        try {
-          const messages = await channel.messages.fetch({ limit: 100 });
-          const sorted   = [...messages.values()].reverse();
-          const html     = this.buildTranscriptHTML(channel.name, sorted, ticket);
-          db.prepare('UPDATE tickets SET transcript = ? WHERE id = ?').run(html, ticket.id);
-        } catch {}
-
-        const { config } = await import('../../config');
-        const transcriptUrl = `${config.panelUrl}/api/tickets/${ticket.guild_id}/${ticket.id}/transcript`;
-
-        await channel.send({
-          embeds: [new EmbedBuilder()
-            .setColor(0xFEE75C)
-            .setTitle('⏱️ Ticket Auto-Closed')
-            .setDescription(`This ticket was automatically closed due to **${cfg.autoclose_hours} hours** of inactivity.`)
-            .addFields({ name: 'Transcript', value: `[View Transcript](${transcriptUrl})` })],
+    // ── User joined the hub channel ──────────────────────────────────
+    if (after.channelId === cfg.hub_channel_id) {
+      // Cooldown check
+      const lastCreated = cooldowns.get(member.id);
+      if (lastCreated && Date.now() - lastCreated < COOLDOWN_MS) {
+        const remaining = Math.ceil((COOLDOWN_MS - (Date.now() - lastCreated)) / 1000);
+        await member.send({
+          embeds: [this.errEmbed(`You're on cooldown! Please wait **${remaining}s** before creating another channel.`)],
         }).catch(() => {});
+        return;
+      }
+
+      // Get user's saved settings
+      const userSettings = this.db.prepare(
+        'SELECT channel_name, channel_limit FROM temp_voice_user_settings WHERE user_id = ?'
+      ).get(member.id) as any;
+
+      const name  = userSettings?.channel_name  ?? `${member.displayName}'s Channel`;
+      const limit = userSettings?.channel_limit > 0 ? userSettings.channel_limit : cfg.default_limit;
+
+      try {
+        const category = guild.channels.cache.get(cfg.category_id) as CategoryChannel | undefined;
+
+        // Create the voice channel
+        const channel = await guild.channels.create({
+          name,
+          type: ChannelType.GuildVoice,
+          parent: category ?? undefined,
+          userLimit: limit,
+          permissionOverwrites: [
+            {
+              id:   guild.id,
+              deny: [PermissionFlagsBits.Connect],
+            },
+            {
+              id:   member.id,
+              allow: [PermissionFlagsBits.Connect, PermissionFlagsBits.ManageChannels],
+            },
+          ],
+        });
+
+        // Create a paired text channel for the control panel
+        const textChannel = await guild.channels.create({
+          name: `🎙︱${name.toLowerCase().replace(/\s+/g, '-').slice(0, 90)}`,
+          type: ChannelType.GuildText,
+          parent: category ?? undefined,
+          topic: `Voice controls for ${name} · Owner: ${member.displayName}`,
+          permissionOverwrites: [
+            {
+              id:   guild.id,
+              deny: [PermissionFlagsBits.SendMessages, PermissionFlagsBits.ViewChannel],
+            },
+            {
+              id:   member.id,
+              allow: [PermissionFlagsBits.SendMessages, PermissionFlagsBits.ViewChannel, PermissionFlagsBits.ReadMessageHistory],
+            },
+          ],
+        });
+
+        await member.voice.setChannel(channel);
+        cooldowns.set(member.id, Date.now());
+
+        this.db.prepare(
+          'INSERT OR REPLACE INTO temp_voice_channels (channel_id, owner_id, guild_id, text_channel_id) VALUES (?, ?, ?, ?)'
+        ).run(channel.id, member.id, guild.id, textChannel.id);
+
+        // Build control panel
+        const controlRow1 = new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder().setCustomId('tv:lock').setLabel('Lock').setStyle(ButtonStyle.Danger).setEmoji('🔒'),
+          new ButtonBuilder().setCustomId('tv:unlock').setLabel('Unlock').setStyle(ButtonStyle.Success).setEmoji('🔓'),
+          new ButtonBuilder().setCustomId('tv:rename').setLabel('Rename').setStyle(ButtonStyle.Primary).setEmoji('✏️'),
+          new ButtonBuilder().setCustomId('tv:limit').setLabel('Limit').setStyle(ButtonStyle.Primary).setEmoji('👥'),
+          new ButtonBuilder().setCustomId('tv:info').setLabel('Info').setStyle(ButtonStyle.Secondary).setEmoji('ℹ️'),
+        );
+        const controlRow2 = new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder().setCustomId('tv:permit').setLabel('Permit').setStyle(ButtonStyle.Success).setEmoji('✅'),
+          new ButtonBuilder().setCustomId('tv:reject').setLabel('Reject').setStyle(ButtonStyle.Danger).setEmoji('⛔'),
+          new ButtonBuilder().setCustomId('tv:claim').setLabel('Claim').setStyle(ButtonStyle.Primary).setEmoji('👑'),
+          new ButtonBuilder().setCustomId('tv:transfer').setLabel('Transfer').setStyle(ButtonStyle.Secondary).setEmoji('🔄'),
+          new ButtonBuilder().setCustomId('tv:kick').setLabel('Kick').setStyle(ButtonStyle.Danger).setEmoji('👢'),
+        );
+
+        const controlEmbed = new EmbedBuilder()
+          .setColor(0x5865F2)
+          .setTitle('🎙️ Voice Channel Controls')
+          .setDescription(`**Owner:** <@${member.id}>\n**Voice:** <#${channel.id}>${limit ? `\n**Limit:** ${limit} users` : '\n**Limit:** Unlimited'}`)
+          .addFields(
+            { name: '🔒 Lock',     value: 'Block others from joining', inline: true },
+            { name: '🔓 Unlock',   value: 'Allow others to join',      inline: true },
+            { name: '✏️ Rename',   value: 'Change the channel name',   inline: true },
+            { name: '👥 Limit',    value: 'Set max users (0=∞)',       inline: true },
+            { name: '✅ Permit',   value: 'Allow a specific user',     inline: true },
+            { name: '⛔ Reject',   value: 'Block & kick a user',       inline: true },
+            { name: '👑 Claim',    value: 'Claim if owner left',       inline: true },
+            { name: '🔄 Transfer', value: 'Give ownership to someone', inline: true },
+            { name: '👢 Kick',     value: 'Remove user from VC',       inline: true },
+          )
+          .setFooter({ text: 'This channel is deleted when the voice channel empties.' });
+
+        await textChannel.send({
+          embeds: [controlEmbed],
+          components: [controlRow1, controlRow2],
+        });
+
+      } catch (err) {
+        console.error('[TempVoice] Failed to create channel:', err);
       }
     }
+
+    // ── User left a temp channel — delete if empty ───────────────────
+    if (before.channel) {
+      const row = this.db.prepare(
+        'SELECT owner_id, text_channel_id FROM temp_voice_channels WHERE channel_id = ?'
+      ).get(before.channel.id) as any;
+
+      if (row && before.channel.members.size === 0) {
+        await before.channel.delete('Temporary voice channel empty').catch(() => {});
+        // Also delete the paired text control channel
+        if (row.text_channel_id) {
+          const textCh = before.channel.guild?.channels.cache.get(row.text_channel_id);
+          if (textCh) await textCh.delete('Paired temp voice channel deleted').catch(() => {});
+        }
+        this.db.prepare('DELETE FROM temp_voice_channels WHERE channel_id = ?').run(before.channel.id);
+        cooldowns.delete(row.owner_id);
+      }
+    }
+  }
+
+  private getOwnedChannel(db: DatabaseSync, userId: string) {
+    return db.prepare(
+      'SELECT channel_id FROM temp_voice_channels WHERE owner_id = ?'
+    ).get(userId) as { channel_id: string } | undefined;
+  }
+
+  private errEmbed(msg: string) {
+    return new EmbedBuilder().setColor(0xED4245).setDescription(`❌ ${msg}`);
+  }
+
+  private okEmbed(msg: string) {
+    return new EmbedBuilder().setColor(0x57F287).setDescription(`✅ ${msg}`);
+  }
+
+  // ─── Commands ─────────────────────────────────────────────────────
+  private async cmdSetup(interaction: any, db: DatabaseSync) {
+    if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+      return interaction.reply({ embeds: [this.errEmbed('You need Administrator permission.')], ephemeral: true });
+    }
+    const hub      = interaction.options.getChannel('hub');
+    const category = interaction.options.getChannel('category');
+    const limit    = interaction.options.getInteger('limit') ?? 0;
+
+    db.prepare(`
+      INSERT INTO temp_voice_config (guild_id, hub_channel_id, category_id, default_limit)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(guild_id) DO UPDATE SET
+        hub_channel_id = excluded.hub_channel_id,
+        category_id    = excluded.category_id,
+        default_limit  = excluded.default_limit
+    `).run(interaction.guildId, hub.id, category.id, limit);
+
+    await interaction.reply({
+      embeds: [new EmbedBuilder()
+        .setColor(0x57F287)
+        .setTitle('🎙️ Temp Voice Setup Complete')
+        .addFields(
+          { name: 'Hub Channel', value: `<#${hub.id}>`, inline: true },
+          { name: 'Category',    value: category.name,  inline: true },
+          { name: 'Default Limit', value: limit === 0 ? 'Unlimited' : `${limit}`, inline: true },
+        )
+        .setDescription('Users who join the hub channel will get their own temporary voice channel!')],
+      ephemeral: true,
+    });
+  }
+
+  private async cmdLock(interaction: any, db: DatabaseSync) {
+    const row = this.getOwnedChannel(db, interaction.user.id);
+    if (!row) return interaction.reply({ embeds: [this.errEmbed("You don't own a temp voice channel.")], ephemeral: true });
+
+    const channel = interaction.guild?.channels.cache.get(row.channel_id);
+    if (!channel) return interaction.reply({ embeds: [this.errEmbed('Channel not found.')], ephemeral: true });
+
+    await channel.permissionOverwrites.edit(interaction.guild!.roles.everyone, { Connect: false });
+    await interaction.reply({ embeds: [this.okEmbed('🔒 Voice channel **locked**.').setColor(0xFEE75C)] });
+  }
+
+  private async cmdUnlock(interaction: any, db: DatabaseSync) {
+    const row = this.getOwnedChannel(db, interaction.user.id);
+    if (!row) return interaction.reply({ embeds: [this.errEmbed("You don't own a temp voice channel.")], ephemeral: true });
+
+    const channel = interaction.guild?.channels.cache.get(row.channel_id);
+    if (!channel) return interaction.reply({ embeds: [this.errEmbed('Channel not found.')], ephemeral: true });
+
+    await channel.permissionOverwrites.edit(interaction.guild!.roles.everyone, { Connect: true });
+    await interaction.reply({ embeds: [this.okEmbed('🔓 Voice channel **unlocked**.').setColor(0x57F287)] });
+  }
+
+  private async cmdLimit(interaction: any, db: DatabaseSync) {
+    const row = this.getOwnedChannel(db, interaction.user.id);
+    if (!row) return interaction.reply({ embeds: [this.errEmbed("You don't own a temp voice channel.")], ephemeral: true });
+
+    const amount  = interaction.options.getInteger('amount', true);
+    const channel = interaction.guild?.channels.cache.get(row.channel_id);
+    if (!channel) return interaction.reply({ embeds: [this.errEmbed('Channel not found.')], ephemeral: true });
+
+    await channel.edit({ userLimit: amount });
+
+    db.prepare(`
+      INSERT INTO temp_voice_user_settings (user_id, channel_limit)
+      VALUES (?, ?)
+      ON CONFLICT(user_id) DO UPDATE SET channel_limit = excluded.channel_limit
+    `).run(interaction.user.id, amount);
+
+    await interaction.reply({
+      embeds: [this.okEmbed(`User limit set to **${amount === 0 ? 'Unlimited' : amount}**.`)],
+    });
+  }
+
+  private async cmdName(interaction: any, db: DatabaseSync) {
+    const row = this.getOwnedChannel(db, interaction.user.id);
+    if (!row) return interaction.reply({ embeds: [this.errEmbed("You don't own a temp voice channel.")], ephemeral: true });
+
+    const name    = interaction.options.getString('name', true);
+    const channel = interaction.guild?.channels.cache.get(row.channel_id);
+    if (!channel) return interaction.reply({ embeds: [this.errEmbed('Channel not found.')], ephemeral: true });
+
+    await channel.edit({ name });
+
+    db.prepare(`
+      INSERT INTO temp_voice_user_settings (user_id, channel_name)
+      VALUES (?, ?)
+      ON CONFLICT(user_id) DO UPDATE SET channel_name = excluded.channel_name
+    `).run(interaction.user.id, name);
+
+    await interaction.reply({ embeds: [this.okEmbed(`Channel renamed to **${name}**.`)] });
+  }
+
+  private async cmdPermit(interaction: any, db: DatabaseSync) {
+    const row = this.getOwnedChannel(db, interaction.user.id);
+    if (!row) return interaction.reply({ embeds: [this.errEmbed("You don't own a temp voice channel.")], ephemeral: true });
+
+    const target  = interaction.options.getMember('user') as GuildMember;
+    const channel = interaction.guild?.channels.cache.get(row.channel_id);
+    if (!channel) return interaction.reply({ embeds: [this.errEmbed('Channel not found.')], ephemeral: true });
+
+    await channel.permissionOverwrites.edit(target, { Connect: true });
+    await interaction.reply({ embeds: [this.okEmbed(`✅ Permitted ${target} to join your channel.`)] });
+  }
+
+  private async cmdReject(interaction: any, db: DatabaseSync) {
+    const row = this.getOwnedChannel(db, interaction.user.id);
+    if (!row) return interaction.reply({ embeds: [this.errEmbed("You don't own a temp voice channel.")], ephemeral: true });
+
+    const target  = interaction.options.getMember('user') as GuildMember;
+    const channel = interaction.guild?.channels.cache.get(row.channel_id);
+    if (!channel) return interaction.reply({ embeds: [this.errEmbed('Channel not found.')], ephemeral: true });
+
+    if (target.voice.channelId === row.channel_id) {
+      await target.voice.disconnect('Rejected from temp voice channel');
+    }
+    await channel.permissionOverwrites.edit(target, { Connect: false });
+    await interaction.reply({ embeds: [this.okEmbed(`❌ Rejected ${target} from your channel.`)] });
+  }
+
+  private async cmdClaim(interaction: any, db: DatabaseSync) {
+    const vc = interaction.member?.voice?.channel;
+    if (!vc) return interaction.reply({ embeds: [this.errEmbed("You're not in a voice channel.")], ephemeral: true });
+
+    const row = db.prepare('SELECT owner_id FROM temp_voice_channels WHERE channel_id = ?').get(vc.id) as any;
+    if (!row) return interaction.reply({ embeds: [this.errEmbed("That's not a temporary channel.")], ephemeral: true });
+
+    // Check if owner is still in the channel
+    const ownerInChannel = vc.members.has(row.owner_id);
+    if (ownerInChannel) {
+      return interaction.reply({ embeds: [this.errEmbed('The owner is still in the channel.')], ephemeral: true });
+    }
+
+    db.prepare('UPDATE temp_voice_channels SET owner_id = ? WHERE channel_id = ?').run(interaction.user.id, vc.id);
+    await vc.permissionOverwrites.edit(interaction.user.id, { Connect: true, ManageChannels: true });
+    await interaction.reply({ embeds: [this.okEmbed('You are now the owner of this channel! 👑')] });
+  }
+
+  private async cmdInfo(interaction: any, db: DatabaseSync) {
+    const vc = interaction.member?.voice?.channel;
+    if (!vc) return interaction.reply({ embeds: [this.errEmbed("You're not in a voice channel.")], ephemeral: true });
+
+    const row = db.prepare('SELECT owner_id, created_at FROM temp_voice_channels WHERE channel_id = ?').get(vc.id) as any;
+    if (!row) return interaction.reply({ embeds: [this.errEmbed("That's not a temporary channel.")], ephemeral: true });
+
+    await interaction.reply({
+      embeds: [new EmbedBuilder()
+        .setColor(0x5865F2)
+        .setTitle(`🎙️ ${vc.name}`)
+        .addFields(
+          { name: 'Owner',   value: `<@${row.owner_id}>`, inline: true },
+          { name: 'Members', value: `${vc.members.size}${vc.userLimit ? `/${vc.userLimit}` : ''}`, inline: true },
+          { name: 'Created', value: `<t:${row.created_at}:R>`, inline: true },
+          { name: 'Status',  value: vc.userLimit === 0 ? '🔓 Unlimited' : `👥 ${vc.members.size}/${vc.userLimit}`, inline: true },
+        )],
+      ephemeral: true,
+    });
   }
 }
