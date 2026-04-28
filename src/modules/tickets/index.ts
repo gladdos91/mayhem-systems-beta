@@ -262,9 +262,10 @@ export class TempVoiceModule extends BaseModule {
 
   // ─── Voice State Update (core JTC logic) ──────────────────────────
   async onVoiceStateUpdate(before: VoiceState, after: VoiceState) {
-    const member = after.member ?? before.member;
-    if (!member) return;
-    const guild = member.guild;
+    try {
+      const member = after.member ?? before.member;
+      if (!member) return;
+      const guild = member.guild;
 
     const cfg = this.db.prepare(
       'SELECT hub_channel_id, category_id, default_limit FROM temp_voice_config WHERE guild_id = ?'
@@ -396,6 +397,9 @@ export class TempVoiceModule extends BaseModule {
         this.db.prepare('DELETE FROM temp_voice_channels WHERE channel_id = ?').run(before.channel.id);
         cooldowns.delete(row.owner_id);
       }
+    }
+    } catch (err) {
+      console.error('[TempVoice] onVoiceStateUpdate error:', err);
     }
   }
 
