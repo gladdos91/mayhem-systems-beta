@@ -2,7 +2,7 @@ import {
   Client, VoiceState, SlashCommandBuilder,
   PermissionFlagsBits, ChannelType, EmbedBuilder,
   CategoryChannel, Interaction, ButtonBuilder, ButtonStyle,
-  ActionRowBuilder, GuildMember,
+  ActionRowBuilder, GuildMember, ModalBuilder, TextInputBuilder, TextInputStyle,
 } from 'discord.js';
 import { DatabaseSync } from 'node:sqlite';
 import { BaseModule } from '../base';
@@ -89,6 +89,177 @@ export class TempVoiceModule extends BaseModule {
     },
   ];
 
+  // ─── Button / Modal Interaction Handler ───────────────────────────
+  async onInteraction(interaction: any) {
+    const db = this.db;
+
+    // ── Buttons ───────────────────────────────────────────────────────
+    if (interaction.isButton() && interaction.customId.startsWith('tv:')) {
+      const action = interaction.customId.split(':')[1];
+      const vcId   = this.db.prepare(
+        'SELECT channel_id FROM temp_voice_channels WHERE owner_id = ? AND guild_id = ?'
+      ).get(interaction.user.id, interaction.guildId) as any;
+
+      // Actions that don't require ownership
+      if (action === 'claim') return this.cmdClaim(interaction, db);
+      if (action === 'info')  return this.cmdInfo(interaction, db);
+
+      // All other actions require ownership
+      if (!vcId) return interaction.reply({ embeds: [this.errEmbed('You don\'t own a voice channel.')], ephemeral: true });
+
+      switch (action) {
+        case 'lock':     return this.cmdLock(interaction, db);
+        case 'unlock':   return this.cmdUnlock(interaction, db);
+        case 'rename': {
+          const modal = new ModalBuilder()
+            .setCustomId('tv-modal:rename')
+            .setTitle('Rename Channel')
+            .addComponents(new ActionRowBuilder<any>().addComponents(
+              new TextInputBuilder()
+                .setCustomId('name')
+                .setLabel('New channel name')
+                .setStyle(TextInputStyle.Short)
+                .setMaxLength(100)
+                .setRequired(true)
+            ));
+          return interaction.showModal(modal);
+        }
+        case 'limit': {
+          const modal = new ModalBuilder()
+            .setCustomId('tv-modal:limit')
+            .setTitle('Set User Limit')
+            .addComponents(new ActionRowBuilder<any>().addComponents(
+              new TextInputBuilder()
+                .setCustomId('limit')
+                .setLabel('Max users (0 = unlimited)')
+                .setStyle(TextInputStyle.Short)
+                .setMaxLength(2)
+                .setRequired(true)
+            ));
+          return interaction.showModal(modal);
+        }
+        case 'permit': {
+          const modal = new ModalBuilder()
+            .setCustomId('tv-modal:permit')
+            .setTitle('Permit User')
+            .addComponents(new ActionRowBuilder<any>().addComponents(
+              new TextInputBuilder()
+                .setCustomId('userId')
+                .setLabel('User ID to permit')
+                .setStyle(TextInputStyle.Short)
+                .setMaxLength(20)
+                .setRequired(true)
+            ));
+          return interaction.showModal(modal);
+        }
+        case 'reject': {
+          const modal = new ModalBuilder()
+            .setCustomId('tv-modal:reject')
+            .setTitle('Reject User')
+            .addComponents(new ActionRowBuilder<any>().addComponents(
+              new TextInputBuilder()
+                .setCustomId('userId')
+                .setLabel('User ID to reject/kick')
+                .setStyle(TextInputStyle.Short)
+                .setMaxLength(20)
+                .setRequired(true)
+            ));
+          return interaction.showModal(modal);
+        }
+        case 'transfer': {
+          const modal = new ModalBuilder()
+            .setCustomId('tv-modal:transfer')
+            .setTitle('Transfer Ownership')
+            .addComponents(new ActionRowBuilder<any>().addComponents(
+              new TextInputBuilder()
+                .setCustomId('userId')
+                .setLabel('User ID to transfer to')
+                .setStyle(TextInputStyle.Short)
+                .setMaxLength(20)
+                .setRequired(true)
+            ));
+          return interaction.showModal(modal);
+        }
+        case 'kick': {
+          const modal = new ModalBuilder()
+            .setCustomId('tv-modal:kick')
+            .setTitle('Kick User from VC')
+            .addComponents(new ActionRowBuilder<any>().addComponents(
+              new TextInputBuilder()
+                .setCustomId('userId')
+                .setLabel('User ID to kick')
+                .setStyle(TextInputStyle.Short)
+                .setMaxLength(20)
+                .setRequired(true)
+            ));
+          return interaction.showModal(modal);
+        }
+      }
+    }
+
+    // ── Modals ────────────────────────────────────────────────────────
+    if (interaction.isModalSubmit() && interaction.customId.startsWith('tv-modal:')) {
+      const action = interaction.customId.split(':')[1];
+      const vcRow  = this.db.prepare(
+        'SELECT channel_id FROM temp_voice_channels WHERE owner_id = ? AND guild_id = ?'
+      ).get(interaction.user.id, interaction.guildId) as any;
+      if (!vcRow) return interaction.reply({ embeds: [this.errEmbed('You don\'t own a voice channel.')], ephemeral: true });
+
+      const channel = interaction.guild?.channels.cache.get(vcRow.channel_id);
+      if (!channel) return interaction.reply({ embeds: [this.errEmbed('Channel not found.')], ephemeral: true });
+
+      switch (action) {
+        case 'rename': {
+          const name = interaction.fields.getTextInputValue('name').slice(0, 100);
+          await (channel as any).setName(name);
+          this.db.prepare('UPDATE temp_voice_user_settings SET channel_name = ? WHERE user_id = ?').run(name, interaction.user.id);
+          return interaction.reply({ embeds: [this.okEmbed(`Channel renamed to **${name}**.`)], ephemeral: true });
+        }
+        case 'limit': {
+          const limit = parseInt(interaction.fields.getTextInputValue('limit')) || 0;
+          await (channel as any).setUserLimit(limit);
+          this.db.prepare('INSERT OR REPLACE INTO temp_voice_user_settings (user_id, channel_limit) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET channel_limit = ?').run(interaction.user.id, limit, limit);
+          return interaction.reply({ embeds: [this.okEmbed(`Limit set to **${limit === 0 ? 'unlimited' : limit}**.`)], ephemeral: true });
+        }
+        case 'permit': {
+          const userId = interaction.fields.getTextInputValue('userId').trim();
+          try {
+            await (channel as any).permissionOverwrites.edit(userId, { Connect: true });
+            return interaction.reply({ embeds: [this.okEmbed(`<@${userId}> can now join your channel.`)], ephemeral: true });
+          } catch { return interaction.reply({ embeds: [this.errEmbed('Invalid user ID.')], ephemeral: true }); }
+        }
+        case 'reject': {
+          const userId = interaction.fields.getTextInputValue('userId').trim();
+          try {
+            await (channel as any).permissionOverwrites.edit(userId, { Connect: false });
+            const member = interaction.guild?.members.cache.get(userId);
+            if (member?.voice.channelId === vcRow.channel_id) {
+              await member.voice.disconnect('Rejected from channel').catch(() => {});
+            }
+            return interaction.reply({ embeds: [this.okEmbed(`<@${userId}> has been blocked from your channel.`)], ephemeral: true });
+          } catch { return interaction.reply({ embeds: [this.errEmbed('Invalid user ID.')], ephemeral: true }); }
+        }
+        case 'transfer': {
+          const userId = interaction.fields.getTextInputValue('userId').trim();
+          try {
+            this.db.prepare('UPDATE temp_voice_channels SET owner_id = ? WHERE channel_id = ?').run(userId, vcRow.channel_id);
+            await (channel as any).permissionOverwrites.edit(userId, { Connect: true, ManageChannels: true });
+            await (channel as any).permissionOverwrites.edit(interaction.user.id, { ManageChannels: null });
+            return interaction.reply({ embeds: [this.okEmbed(`Ownership transferred to <@${userId}>.`)], ephemeral: true });
+          } catch { return interaction.reply({ embeds: [this.errEmbed('Invalid user ID.')], ephemeral: true }); }
+        }
+        case 'kick': {
+          const userId = interaction.fields.getTextInputValue('userId').trim();
+          const member = interaction.guild?.members.cache.get(userId);
+          if (!member) return interaction.reply({ embeds: [this.errEmbed('User not found.')], ephemeral: true });
+          if (member.voice.channelId !== vcRow.channel_id) return interaction.reply({ embeds: [this.errEmbed('That user is not in your channel.')], ephemeral: true });
+          await member.voice.disconnect('Kicked from temp voice').catch(() => {});
+          return interaction.reply({ embeds: [this.okEmbed(`<@${userId}> has been removed from your channel.`)], ephemeral: true });
+        }
+      }
+    }
+  }
+
   // ─── Voice State Update (core JTC logic) ──────────────────────────
   async onVoiceStateUpdate(before: VoiceState, after: VoiceState) {
     const member = after.member ?? before.member;
@@ -129,6 +300,10 @@ export class TempVoiceModule extends BaseModule {
           userLimit: limit,
           permissionOverwrites: [
             {
+              id:   guild.id,
+              deny: [PermissionFlagsBits.Connect],
+            },
+            {
               id:   member.id,
               allow: [PermissionFlagsBits.Connect, PermissionFlagsBits.ManageChannels],
             },
@@ -141,6 +316,57 @@ export class TempVoiceModule extends BaseModule {
         this.db.prepare(
           'INSERT OR REPLACE INTO temp_voice_channels (channel_id, owner_id, guild_id) VALUES (?, ?, ?)'
         ).run(channel.id, member.id, guild.id);
+
+        // ── Post control panel to the voice channel's text chat ──────
+        const controlRow1 = new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder().setCustomId('tv:lock').setLabel('Lock').setStyle(ButtonStyle.Danger).setEmoji('🔒'),
+          new ButtonBuilder().setCustomId('tv:unlock').setLabel('Unlock').setStyle(ButtonStyle.Success).setEmoji('🔓'),
+          new ButtonBuilder().setCustomId('tv:rename').setLabel('Rename').setStyle(ButtonStyle.Primary).setEmoji('✏️'),
+          new ButtonBuilder().setCustomId('tv:limit').setLabel('Limit').setStyle(ButtonStyle.Primary).setEmoji('👥'),
+          new ButtonBuilder().setCustomId('tv:info').setLabel('Info').setStyle(ButtonStyle.Secondary).setEmoji('ℹ️'),
+        );
+        const controlRow2 = new ActionRowBuilder<ButtonBuilder>().addComponents(
+          new ButtonBuilder().setCustomId('tv:permit').setLabel('Permit').setStyle(ButtonStyle.Success).setEmoji('✅'),
+          new ButtonBuilder().setCustomId('tv:reject').setLabel('Reject').setStyle(ButtonStyle.Danger).setEmoji('⛔'),
+          new ButtonBuilder().setCustomId('tv:claim').setLabel('Claim').setStyle(ButtonStyle.Primary).setEmoji('👑'),
+          new ButtonBuilder().setCustomId('tv:transfer').setLabel('Transfer').setStyle(ButtonStyle.Secondary).setEmoji('🔄'),
+          new ButtonBuilder().setCustomId('tv:kick').setLabel('Kick').setStyle(ButtonStyle.Danger).setEmoji('👢'),
+        );
+
+        const controlEmbed = new EmbedBuilder()
+          .setColor(0x5865F2)
+          .setTitle('🎙️ Voice Channel Controls')
+          .setDescription(`**Owner:** <@${member.id}>\n**Channel:** ${channel.name}${limit ? `\n**Limit:** ${limit} users` : ''}`)
+          .addFields(
+            { name: '🔒 Lock / 🔓 Unlock', value: 'Block or allow others to join', inline: true },
+            { name: '✏️ Rename',            value: 'Change the channel name',        inline: true },
+            { name: '👥 Limit',             value: 'Set max user count',             inline: true },
+            { name: '✅ Permit',            value: 'Allow a specific user in',       inline: true },
+            { name: '⛔ Reject',            value: 'Block a specific user',          inline: true },
+            { name: '👑 Claim',             value: 'Take ownership if owner left',   inline: true },
+            { name: '🔄 Transfer',          value: 'Give ownership to another user', inline: true },
+            { name: '👢 Kick',              value: 'Remove a user from the channel', inline: true },
+          )
+          .setFooter({ text: 'Only the channel owner can use most controls.' });
+
+        // Send to the voice channel's built-in text chat (Discord forum/text-in-voice)
+        try {
+          await (channel as any).send({
+            embeds: [controlEmbed],
+            components: [controlRow1, controlRow2],
+          });
+        } catch {
+          // Text-in-voice may not be available — send to system channel as fallback
+          const sysChannel = guild.systemChannel;
+          if (sysChannel) {
+            await sysChannel.send({
+              content: `<@${member.id}> — Controls for **${name}**:`,
+              embeds: [controlEmbed],
+              components: [controlRow1, controlRow2],
+            }).catch(() => {});
+          }
+        }
+
       } catch (err) {
         console.error('[TempVoice] Failed to create channel:', err);
       }
