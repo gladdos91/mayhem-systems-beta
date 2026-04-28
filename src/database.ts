@@ -54,10 +54,11 @@ function createTables() {
     );
 
     CREATE TABLE IF NOT EXISTS temp_voice_channels (
-      channel_id   TEXT PRIMARY KEY,
-      owner_id     TEXT NOT NULL,
-      guild_id     TEXT NOT NULL,
-      created_at   INTEGER NOT NULL DEFAULT (unixepoch())
+      channel_id      TEXT PRIMARY KEY,
+      owner_id        TEXT NOT NULL,
+      guild_id        TEXT NOT NULL,
+      text_channel_id TEXT,
+      created_at      INTEGER NOT NULL DEFAULT (unixepoch())
     );
 
     CREATE TABLE IF NOT EXISTS temp_voice_user_settings (
@@ -364,6 +365,7 @@ function createTables() {
   // ── Migrations (add columns to existing DBs safely) ──────────────────────
   const migrations = [
     `ALTER TABLE ticket_panels ADD COLUMN image_url TEXT`,
+    `ALTER TABLE temp_voice_channels ADD COLUMN text_channel_id TEXT`,
   ];
   for (const sql of migrations) {
     try { db.exec(sql); } catch { /* column already exists — safe to ignore */ }
